@@ -32,55 +32,60 @@ app.get('/health', async (_req, res) => {
 });
 
 app.get('/auth/discord', (_req, res) => {
-  const params = new URLSearchParams({
-    client_id: process.env.DISCORD_CLIENT_ID || '',
-    redirect_uri: process.env.DISCORD_REDIRECT_URI || '',
-    response_type: 'code',
-    scope: 'identify'
-  });
+  const params = new URLSearchParams({ client_id: process.env.DISCORD_CLIENT_ID || '', redirect_uri: process.env.DISCORD_REDIRECT_URI || '', response_type: 'code', scope: 'identify' });
   res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 });
+
+async function exchangeDiscordCode(code, redirectUri) {
+  const body = new URLSearchParams({ client_id: process.env.DISCORD_CLIENT_ID, client_secret: process.env.DISCORD_CLIENT_SECRET, grant_type: 'authorization_code', code, redirect_uri: redirectUri });
+  const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  if (!tokenResponse.ok) throw new Error('OAuth token exchange failed');
+  const token = await tokenResponse.json();
+  const meResponse = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
+  if (!meResponse.ok) throw new Error('Discord identity lookup failed');
+  return await meResponse.json();
+}
+
+async function upsertDiscordUser(me) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [me.id]);
+    let userId;
+    if (existing.rowCount) userId = existing.rows[0].user_id;
+    else {
+      const created = await client.query('INSERT INTO users DEFAULT VALUES RETURNING id');
+      userId = created.rows[0].id;
+      await client.query('INSERT INTO profiles(user_id, display_name, avatar_url) VALUES($1,$2,$3)', [userId, me.global_name || me.username, me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : null]);
+    }
+    await client.query(`INSERT INTO discord_accounts(user_id,discord_id,username,global_name,avatar_url) VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(discord_id) DO UPDATE SET username=EXCLUDED.username, global_name=EXCLUDED.global_name, avatar_url=EXCLUDED.avatar_url`, [userId, me.id, me.username, me.global_name || null, me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : null]);
+    await client.query('COMMIT');
+    return { id: userId, discordId: me.id };
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+}
 
 app.get('/auth/discord/callback', async (req, res) => {
   if (!req.query.code) return res.status(400).send('Missing OAuth code');
   try {
-    const body = new URLSearchParams({
-      client_id: process.env.DISCORD_CLIENT_ID,
-      client_secret: process.env.DISCORD_CLIENT_SECRET,
-      grant_type: 'authorization_code',
-      code: req.query.code,
-      redirect_uri: process.env.DISCORD_REDIRECT_URI
-    });
-    const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body
-    });
-    if (!tokenResponse.ok) throw new Error('OAuth token exchange failed');
-    const token = await tokenResponse.json();
-    const meResponse = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    if (!meResponse.ok) throw new Error('Discord identity lookup failed');
-    const me = await meResponse.json();
+    const me = await exchangeDiscordCode(req.query.code, process.env.DISCORD_REDIRECT_URI);
+    const user = await upsertDiscordUser(me);
+    res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`);
+  } catch (e) { console.error(e); res.status(500).send('فشل تسجيل الدخول عبر Discord'); }
+});
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const existing = await client.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [me.id]);
-      let userId;
-      if (existing.rowCount) userId = existing.rows[0].user_id;
-      else {
-        const created = await client.query('INSERT INTO users DEFAULT VALUES RETURNING id');
-        userId = created.rows[0].id;
-        await client.query('INSERT INTO profiles(user_id, display_name, avatar_url) VALUES($1,$2,$3)', [userId, me.global_name || me.username, me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : null]);
-      }
-      await client.query(`INSERT INTO discord_accounts(user_id,discord_id,username,global_name,avatar_url) VALUES($1,$2,$3,$4,$5)
-        ON CONFLICT(discord_id) DO UPDATE SET username=EXCLUDED.username, global_name=EXCLUDED.global_name, avatar_url=EXCLUDED.avatar_url`, [userId, me.id, me.username, me.global_name || null, me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : null]);
-      await client.query('COMMIT');
-      const session = sign({ id: userId, discordId: me.id });
-      res.redirect(`${webUrl}/?token=${encodeURIComponent(session)}`);
-    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
-  } catch (e) {
-    console.error(e);
-    res.status(500).send('فشل تسجيل الدخول عبر Discord');
-  }
+// Discord Activity uses the same backend/account. Configure the Activity OAuth redirect
+// and DISCORD_ACTIVITY_REDIRECT_URI in the Discord developer portal before production.
+app.post('/activity/auth', async (req, res) => {
+  if (!req.body?.code) return res.status(400).json({ error: 'Missing Activity code' });
+  try {
+    const me = await exchangeDiscordCode(req.body.code, process.env.DISCORD_ACTIVITY_REDIRECT_URI || process.env.DISCORD_REDIRECT_URI);
+    const user = await upsertDiscordUser(me);
+    const profile = await pool.query(`SELECT d.discord_id,d.username,d.global_name,d.avatar_url,p.display_name,p.level,p.experience,p.premium_until,
+      COALESCE((SELECT SUM(amount) FROM point_transactions WHERE user_id=u.id),0)::bigint AS points
+      FROM users u JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE u.id=$1`, [user.id]);
+    res.json({ token: sign(user), discordUser: me, me: profile.rows[0] || null });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'فشل ربط Activity' }); }
 });
 
 app.get('/api/me', auth, async (req, res) => {
