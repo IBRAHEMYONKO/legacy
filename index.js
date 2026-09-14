@@ -33,7 +33,8 @@ function spawnProcess(name, args) {
     cwd: root,
     env: { ...process.env },
     stdio: 'inherit',
-    windowsHide: false
+    windowsHide: false,
+    shell: isWindows
   });
 
   children.set(name, child);
@@ -52,8 +53,8 @@ function spawnProcess(name, args) {
 
 function buildClients() {
   log('core', 'building web and Activity for production mode...');
-  execFileSync(npmCommand, ['--workspace', 'apps/web', 'run', 'build'], { cwd: root, env: { ...process.env }, stdio: 'inherit' });
-  execFileSync(npmCommand, ['--workspace', 'apps/activity', 'run', 'build'], { cwd: root, env: { ...process.env }, stdio: 'inherit' });
+  execFileSync(npmCommand, ['--workspace', 'apps/web', 'run', 'build'], { cwd: root, env: { ...process.env }, stdio: 'inherit', shell: isWindows });
+  execFileSync(npmCommand, ['--workspace', 'apps/activity', 'run', 'build'], { cwd: root, env: { ...process.env }, stdio: 'inherit', shell: isWindows });
 }
 
 async function start(options = {}) {
@@ -75,7 +76,7 @@ async function stop() {
   await Promise.all(running.map(([name, child]) => new Promise((resolve) => {
     const finish = () => resolve();
     child.once('exit', finish);
-    if (isWindows) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' }).once('exit', resolve);
+    if (isWindows) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', shell: true }).once('exit', resolve);
     else {
       child.kill('SIGTERM');
       setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(); }, 5000).unref();
