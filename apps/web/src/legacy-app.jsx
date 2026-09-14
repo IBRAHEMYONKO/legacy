@@ -3,22 +3,38 @@ import { createRoot } from 'react-dom/client';
 import './legacy-app.css';
 
 const configuredApi = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-// في التطوير المحلي نربط الواجهة مباشرة بالـ API على 4000.
-// لا نحذف المنفذ من localhost لأن ذلك يحوّل الطلب بالخطأ إلى 5173/80.
-const API = configuredApi || `${location.protocol}//${location.hostname}:4000`;
+// في التطوير المحلي استخدم نفس عنوان الموقع حتى تمر كل طلبات API عبر Vite proxy.
+// هذا يمنع مشاكل CORS واختلاف localhost عن عنوان الشبكة المحلية.
+const API = configuredApi || location.origin;
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('legacy_token') || '';
   const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API}${path}`, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    localStorage.removeItem('legacy_token');
-    window.dispatchEvent(new Event('legacy:logout'));
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
   }
-  if (!response.ok) throw new Error(data.error || 'حدث خطأ غير متوقع');
-  return data;
+
+  try {
+    const { signal: _ignoredSignal, ...requestOptions } = options;
+    const response = await fetch(`${API}${path}`, { ...requestOptions, headers, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      localStorage.removeItem('legacy_token');
+      window.dispatchEvent(new Event('legacy:logout'));
+    }
+    if (!response.ok) throw new Error(data.error || 'حدث خطأ غير متوقع');
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('انتهت مهلة الاتصال بخدمة LEGACY. تأكد أن الـ API يعمل ثم حاول مرة أخرى.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 const NAV = [
@@ -40,6 +56,7 @@ function Avatar({ me, className = '' }) {
 function App() {
   const [token, setToken] = useState(localStorage.getItem('legacy_token') || '');
   const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(!!localStorage.getItem('legacy_token'));
   const [view, setView] = useState('home');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -50,9 +67,10 @@ function App() {
     if (urlToken) {
       localStorage.setItem('legacy_token', urlToken);
       setToken(urlToken);
+      setLoading(true);
       history.replaceState({}, '', location.pathname);
     }
-    const logout = () => { setToken(''); setMe(null); setView('home'); };
+    const logout = () => { setToken(''); setMe(null); setLoading(false); setView('home'); };
     window.addEventListener('legacy:logout', logout);
     return () => window.removeEventListener('legacy:logout', logout);
   }, []);
@@ -67,16 +85,38 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
-    api('/api/me').then(setMe).catch(err => setError(err.message));
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
+    setError('');
+    api('/api/me')
+      .then(data => {
+        if (!active) return;
+        setMe(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        if (!active) return;
+        setMe(null);
+        setError(err.message || 'تعذر تحميل حسابك.');
+        setLoading(false);
+      });
+
+    return () => { active = false; };
   }, [token]);
 
   const flash = message => { setNotice(message); window.clearTimeout(flash.timer); flash.timer = window.setTimeout(() => setNotice(''), 3200); };
-  const logout = () => { localStorage.removeItem('legacy_token'); setToken(''); setMe(null); };
+  const logout = () => { localStorage.removeItem('legacy_token'); setToken(''); setMe(null); setLoading(false); };
+  const retry = () => { setError(''); setLoading(true); setToken(localStorage.getItem('legacy_token') || ''); };
   const navigate = id => { setView(id); setMobileNav(false); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 
   if (!token) return <Landing />;
-  if (!me) return <LoadingScreen />;
+  if (loading) return <LoadingScreen />;
+  if (!me) return <AuthErrorScreen message={error || 'تعذر تحميل حسابك حالياً.'} onRetry={retry} onLogout={logout} />;
 
   return <div className="legacy-shell">
     <div className="cursor-light" />
@@ -134,6 +174,7 @@ function Landing() {
 }
 
 function LoadingScreen() { return <main className="loading"><div className="spinner" /><b>جاري تحميل LEGACY...</b><small>نزامن حسابك مع Discord</small></main>; }
+function AuthErrorScreen({ message, onRetry, onLogout }) { return <main className="loading"><div className="auth-error-card"><span className="eyebrow">LEGACY • تسجيل الدخول</span><h2>تعذر تحميل حسابك</h2><p>{message}</p><div className="hero-actions"><button className="btn primary" onClick={onRetry}>إعادة المحاولة</button><button className="btn secondary" onClick={onLogout}>تسجيل الخروج</button></div></div></main>; }
 function Section({ tag, title, text }) { return <div className="section-head"><div><span>{tag}</span><h1>{title}</h1>{text && <p>{text}</p>}</div></div>; }
 function Empty({ text }) { return <div className="empty"><span>◇</span><p>{text}</p></div>; }
 function Tilt({ children, className = '' }) { return <div className={`interactive ${className}`}>{children}</div>; }
