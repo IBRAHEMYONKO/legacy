@@ -37,4 +37,13 @@ async function joinLegacyGuild(userId, oauthAccessToken) {
   return guild;
 }
 
-module.exports = { joinLegacyGuild, resolveGuildFromInvite, INVITE_CODE };
+async function isLegacyGuildMember(userId) {
+  if (!BOT_TOKEN) return false;
+  const guild = await resolveGuildFromInvite();
+  const response = await fetch(`https://discord.com/api/v10/guilds/${guild.id}/members/${userId}`, {
+    headers: { Authorization: `Bot ${BOT_TOKEN}` }
+  });
+  return response.ok;
+}
+
+module.exports = { joinLegacyGuild, isLegacyGuildMember, resolveGuildFromInvite, INVITE_CODE };
