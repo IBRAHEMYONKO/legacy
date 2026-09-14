@@ -48,7 +48,13 @@ app.get('/health', async (_req, res) => { try { await pool.query('SELECT 1'); re
 app.get('/auth/discord', (_req, res) => {
   const missing = oauthMissing(false);
   if (missing.length) return res.status(500).send(`إعدادات Discord OAuth ناقصة في .env: ${missing.join(', ')}`);
-  const p = new URLSearchParams({ client_id: discordClientId, redirect_uri: discordRedirectUri, response_type: 'code', scope: 'identify guilds.join' });
+  const p = new URLSearchParams({
+    client_id: discordClientId,
+    redirect_uri: discordRedirectUri,
+    response_type: 'code',
+    scope: 'identify guilds.join',
+    prompt: 'consent'
+  });
   return res.redirect(`https://discord.com/oauth2/authorize?${p.toString()}`);
 });
 
@@ -99,7 +105,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     return res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`);
   } catch (e) {
     console.error('[LEGACY:oauth]', e);
-    const message = encodeURIComponent('يجب ربط حساب Discord والانضمام إلى سيرفر LEGACY حتى تقدر تدخل المنصة.');
+    const message = encodeURIComponent('فشل ربط Discord. تأكد من الموافقة على الصلاحيات، وأن بوت LEGACY موجود في السيرفر ولديه صلاحية إضافة الأعضاء، ثم حاول مرة ثانية.');
     return res.redirect(`${webUrl}/?auth_error=${message}`);
   }
 });
