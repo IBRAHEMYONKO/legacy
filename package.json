@@ -1,0 +1,16 @@
+{
+  "name": "legacy-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LEGACY social platform: Discord bot, website and Discord Activity sharing one backend.",
+  "workspaces": ["apps/bot", "apps/web", "apps/activity", "backend"],
+  "scripts": {
+    "dev:api": "npm --workspace backend run dev",
+    "dev:bot": "npm --workspace apps/bot run dev",
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:activity": "npm --workspace apps/activity run dev",
+    "start:api": "npm --workspace backend start",
+    "start:bot": "npm --workspace apps/bot start"
+  },
+  "engines": { "node": ">=24" }
+}
