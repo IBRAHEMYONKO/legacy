@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { ensureIdentityGuard } = require('./identity-guard');
 
 const root = path.resolve(__dirname, '..', '..');
 const schemaPath = path.join(root, 'database', 'schema.sql');
@@ -38,6 +39,11 @@ const ready = (async () => {
   const { PGlite } = await import('@electric-sql/pglite');
   db = await PGlite.create(dataPath);
   await db.exec(fs.readFileSync(schemaPath, 'utf8'));
+
+  const guardPool = {
+    query: async (sql, params = []) => resultOf(await db.query(sql, params))
+  };
+  await ensureIdentityGuard(guardPool);
 })();
 
 const pool = {
