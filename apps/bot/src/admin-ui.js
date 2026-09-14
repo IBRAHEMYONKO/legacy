@@ -1,8 +1,9 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 
 function registerAdminUI(client, { internal, admins }) {
   client.on('interactionCreate', async (i) => {
-    if (!i.customId?.startsWith('legacy:admin:') || !admins.has(i.user.id) || i.replied || i.deferred) return;
+    const supported = i.customId?.startsWith('legacy:admin:') || i.customId === 'legacy:modal:code' || i.customId === 'legacy:modal:premium';
+    if (!supported || !admins.has(i.user.id) || i.replied || i.deferred) return;
     try {
       if (i.customId === 'legacy:admin:codes') {
         return i.reply({ content: '🔑 إنشاء كود مكافأة ديناميكي', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('legacy:admin:codes:create').setLabel('إنشاء كود').setEmoji('➕').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('legacy:admin:codes:list').setLabel('عرض الأكواد').setEmoji('📋').setStyle(ButtonStyle.Secondary))], ephemeral: true });
