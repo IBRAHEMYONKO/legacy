@@ -1,4 +1,5 @@
 const { normalizeRewards } = require('./rewards');
+const { registerBotRoutes } = require('./bot-routes');
 
 function registerExtendedRoutes(app, { pool, auth, admin, internal, adminIds }) {
   app.put('/api/profile', auth, async (req, res) => {
@@ -131,5 +132,6 @@ function registerExtendedRoutes(app, { pool, auth, admin, internal, adminIds }) 
     const r = await pool.query('SELECT n.* FROM notifications n JOIN discord_accounts d ON d.user_id=n.user_id WHERE d.discord_id=$1 ORDER BY n.created_at DESC LIMIT 50', [req.params.discordId]);
     res.json(r.rows);
   });
+  registerBotRoutes(app, { pool, internal, adminIds });
 }
 module.exports = { registerExtendedRoutes };
