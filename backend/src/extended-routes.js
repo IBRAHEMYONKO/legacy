@@ -1,7 +1,44 @@
 const { normalizeRewards } = require('./rewards');
 const { registerBotRoutes } = require('./bot-routes');
 
+async function syncSpecialProfile(pool, userId, discordId, adminIds) {
+  if (!userId || !discordId) return;
+  const isDeveloper = adminIds.has(discordId);
+  if (!isDeveloper) return;
+  await pool.query("INSERT INTO user_roles(user_id,role) VALUES($1,'developer') ON CONFLICT DO NOTHING", [userId]);
+  const items = await pool.query("SELECT id,type FROM catalog_items WHERE slug IN ('title-developer','badge-developer') AND active=true");
+  for (const item of items.rows) {
+    await pool.query('INSERT INTO inventory_items(user_id,item_id,quantity) VALUES($1,$2,1) ON CONFLICT(user_id,item_id) DO NOTHING', [userId, item.id]);
+  }
+}
+
 function registerExtendedRoutes(app, { pool, auth, admin, internal, adminIds }) {
+  app.get('/api/cosmetics', auth, async (req, res) => {
+    const me = await pool.query('SELECT d.discord_id FROM discord_accounts d WHERE d.user_id=$1', [req.auth.userId]);
+    if (me.rowCount) await syncSpecialProfile(pool, req.auth.userId, me.rows[0].discord_id, adminIds);
+    const [titles, badges, selected, roles] = await Promise.all([
+      pool.query("SELECT c.*,i.quantity FROM inventory_items i JOIN catalog_items c ON c.id=i.item_id WHERE i.user_id=$1 AND c.type='title' AND c.active=true ORDER BY i.acquired_at DESC", [req.auth.userId]),
+      pool.query("SELECT c.*,i.quantity FROM inventory_items i JOIN catalog_items c ON c.id=i.item_id WHERE i.user_id=$1 AND c.type='badge' AND c.active=true ORDER BY i.acquired_at DESC", [req.auth.userId]),
+      pool.query('SELECT p.selected_title_id,c.name,c.slug,c.metadata FROM profiles p LEFT JOIN catalog_items c ON c.id=p.selected_title_id WHERE p.user_id=$1', [req.auth.userId]),
+      pool.query('SELECT role FROM user_roles WHERE user_id=$1 ORDER BY role', [req.auth.userId])
+    ]);
+    res.json({ titles: titles.rows, badges: badges.rows, selectedTitle: selected.rows[0] || null, roles: roles.rows.map(x => x.role) });
+  });
+
+  app.post('/api/profile/title', auth, async (req, res) => {
+    const titleId = String(req.body.titleId || '').trim();
+    if (!titleId) return res.status(400).json({ error: 'اختر لقباً' });
+    const owned = await pool.query("SELECT c.id,c.name,c.slug,c.metadata FROM inventory_items i JOIN catalog_items c ON c.id=i.item_id WHERE i.user_id=$1 AND i.quantity>0 AND i.item_id=$2 AND c.type='title' AND c.active=true", [req.auth.userId, titleId]);
+    if (!owned.rowCount) return res.status(403).json({ error: 'هذا اللقب غير موجود في حقيبتك' });
+    await pool.query('UPDATE profiles SET selected_title_id=$1 WHERE user_id=$2', [titleId, req.auth.userId]);
+    res.json({ ok: true, title: owned.rows[0] });
+  });
+
+  app.get('/api/points/history', auth, async (req, res) => {
+    const r = await pool.query('SELECT amount,reason,created_at FROM point_transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [req.auth.userId]);
+    res.json(r.rows);
+  });
+
   app.put('/api/profile', auth, async (req, res) => {
     const displayName = String(req.body.displayName ?? '').trim().slice(0, 40);
     const bio = String(req.body.bio ?? '').slice(0, 500);
