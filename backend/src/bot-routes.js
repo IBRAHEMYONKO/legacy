@@ -1,3 +1,37 @@
+const { normalizeRewards } = require('./rewards');
+
+async function redeemForUser(pool, discordId, code) {
+  const user = await pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [discordId]);
+  if (!user.rowCount) throw Object.assign(new Error('الحساب غير مرتبط بـ LEGACY'), { status: 404 });
+  const userId = user.rows[0].user_id;
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    const found = await c.query('SELECT * FROM redeem_codes WHERE code=$1 FOR UPDATE', [code]);
+    if (!found.rowCount) throw Object.assign(new Error('الكود غير موجود'), { status: 404 });
+    const item = found.rows[0];
+    if (!item.active) throw Object.assign(new Error('الكود متوقف'), { status: 400 });
+    if (item.expires_at && new Date(item.expires_at) <= new Date()) throw Object.assign(new Error('انتهت صلاحية الكود'), { status: 400 });
+    if (item.max_uses !== null && item.uses >= item.max_uses) throw Object.assign(new Error('اكتملت استخدامات الكود'), { status: 400 });
+    const used = await c.query('SELECT COUNT(*)::int AS count FROM code_redemptions WHERE code_id=$1 AND user_id=$2', [item.id, userId]);
+    if (used.rows[0].count >= item.per_user_limit) throw Object.assign(new Error('سبق واستخدمت هذا الكود'), { status: 400 });
+    const rewards = normalizeRewards(item.rewards);
+    for (const reward of rewards) {
+      if (reward.type === 'points') await c.query('INSERT INTO point_transactions(user_id,amount,reason) VALUES($1,$2,$3)', [userId, reward.amount, `كود: ${code}`]);
+      if (reward.type === 'item') {
+        const exists = await c.query('SELECT id FROM catalog_items WHERE id=$1 AND active=true', [reward.itemId]);
+        if (!exists.rowCount) throw Object.assign(new Error('عنصر المكافأة غير موجود'), { status: 400 });
+        await c.query('INSERT INTO inventory_items(user_id,item_id,quantity) VALUES($1,$2,$3) ON CONFLICT(user_id,item_id) DO UPDATE SET quantity=inventory_items.quantity+EXCLUDED.quantity,acquired_at=now()', [userId, reward.itemId, reward.quantity]);
+      }
+      if (reward.type === 'premium_days') await c.query("UPDATE profiles SET premium_until=GREATEST(COALESCE(premium_until,now()),now()) + ($1 || ' days')::interval WHERE user_id=$2", [reward.days, userId]);
+    }
+    await c.query('INSERT INTO code_redemptions(code_id,user_id) VALUES($1,$2)', [item.id, userId]);
+    await c.query('UPDATE redeem_codes SET uses=uses+1 WHERE id=$1', [item.id]);
+    await c.query('COMMIT');
+    return rewards;
+  } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+}
+
 function registerBotRoutes(app, { pool, internal, adminIds }) {
   app.post('/internal/shop/buy', internal, async (req, res) => {
     const discordId = String(req.body.discordId || '');
@@ -19,6 +53,14 @@ function registerBotRoutes(app, { pool, internal, adminIds }) {
       await c.query('COMMIT');
       res.json({ ok: true, item: item.rows[0] });
     } catch (e) { await c.query('ROLLBACK'); res.status(e.status || 500).json({ error: e.message }); } finally { c.release(); }
+  });
+
+  app.post('/internal/user/redeem', internal, async (req, res) => {
+    const discordId = String(req.body.discordId || '').trim();
+    const code = String(req.body.code || '').trim().toUpperCase();
+    if (!discordId || !code) return res.status(400).json({ error: 'الكود والحساب مطلوبان' });
+    try { res.json({ ok: true, rewards: await redeemForUser(pool, discordId, code) }); }
+    catch (e) { res.status(e.status || 500).json({ error: e.message || 'فشل استرداد الكود' }); }
   });
 
   app.post('/internal/admin/premium', internal, async (req, res) => {
