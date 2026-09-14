@@ -4,7 +4,7 @@ require('dotenv').config({
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const { pool } = require('./db');
+const { pool, ready } = require('./db');
 const { registerExtendedRoutes } = require('./extended-routes');
 const { registerAdminBotRoutes } = require('./admin-bot-routes');
 const { joinLegacyGuild } = require('./discord-guild');
@@ -138,4 +138,17 @@ app.post('/internal/admin/points', internal, async (req, res) => { const actor =
 app.post('/internal/admin/catalog', internal, async (req, res) => { const actor = String(req.body.actorDiscordId || ''); if (!adminIds.has(actor)) return res.status(403).json({ error: 'الإدارة فقط' }); const { type, slug, name, description = '', price = 0, metadata = {} } = req.body; if (!type || !slug || !name || !Number.isSafeInteger(Number(price)) || Number(price) < 0) return res.status(400).json({ error: 'بيانات العنصر غير صحيحة' }); const a = await pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [actor]); if (!a.rowCount) return res.status(404).json({ error: 'حساب الإدارة غير مرتبط' }); const r = await pool.query('INSERT INTO catalog_items(type,slug,name,description,price,metadata) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [type, slug, name, description, Number(price), JSON.stringify(metadata)]); await pool.query('INSERT INTO audit_logs(actor_user_id,action,payload) VALUES($1,$2,$3)', [a.rows[0].user_id, 'catalog.create', JSON.stringify({ itemId: r.rows[0].id, source: 'discord' })]); res.status(201).json(r.rows[0]); });
 registerAdminBotRoutes(app, { pool, internal, adminIds });
 registerExtendedRoutes(app, { pool, auth, admin, internal, adminIds });
-app.listen(port, () => console.log(`LEGACY API listening on :${port}`));
+
+async function start() {
+  try {
+    await ready;
+    await pool.query('SELECT 1');
+    app.listen(port, () => console.log(`LEGACY API listening on :${port}`));
+  } catch (error) {
+    console.error('[LEGACY:api] DATABASE STARTUP FAILED');
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  }
+}
+
+start();
