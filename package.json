@@ -6,7 +6,7 @@
   "workspaces": ["apps/bot", "apps/web", "apps/activity", "backend"],
   "scripts": {
     "dev": "node index.js",
-    "start": "LEGACY_MODE=production node index.js",
+    "start": "node -e \"process.env.LEGACY_MODE='production'; require('./index').start()\"",
     "dev:api": "npm --workspace backend run dev",
     "dev:bot": "npm --workspace apps/bot run dev",
     "dev:web": "npm --workspace apps/web run dev",
