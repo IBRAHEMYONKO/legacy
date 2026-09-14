@@ -68,6 +68,10 @@ function registerExtendedRoutes(app, { pool, auth, admin, internal, adminIds }) 
     const r = await pool.query('SELECT f.status,f.created_at,d.discord_id,d.username,d.global_name,d.avatar_url,p.display_name,p.level FROM friendships f JOIN users u ON u.id=f.other_user_id JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE f.user_id=$1 ORDER BY f.updated_at DESC', [req.auth.userId]);
     res.json(r.rows);
   });
+  app.get('/api/friends/incoming', auth, async (req, res) => {
+    const r = await pool.query("SELECT f.user_id AS relation_user_id,f.created_at,d.discord_id,d.username,d.global_name,d.avatar_url,p.display_name,p.level FROM friendships f JOIN users u ON u.id=f.user_id JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE f.other_user_id=$1 AND f.status='pending' ORDER BY f.created_at DESC", [req.auth.userId]);
+    res.json(r.rows);
+  });
   app.post('/api/friends/request', auth, async (req, res) => {
     const discordId = String(req.body.discordId || '').trim();
     const target = await pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [discordId]);
