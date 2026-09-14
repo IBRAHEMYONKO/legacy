@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js", "test": "node --test test/*.test.js" },
   "dependencies": {
+    "@electric-sql/pglite": "^0.3.13",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
