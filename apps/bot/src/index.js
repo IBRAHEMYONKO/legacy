@@ -16,6 +16,7 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
+const { handleAdminInteraction, handleAdminModal } = require('./admin');
 
 const API = (process.env.LEGACY_API_URL || `http://localhost:${process.env.API_PORT || 4000}`).replace(/\/$/, '');
 const INTERNAL_KEY = process.env.LEGACY_INTERNAL_KEY || '';
@@ -101,7 +102,7 @@ async function sendProfile(interaction) {
     internal(`/internal/user/${interaction.user.id}`),
     internal(`/internal/user/${interaction.user.id}/cosmetics`)
   ]);
-  const badges = (cosmetics.items || []).filter(x => x.type === 'badge').map(x => `${x.metadata?.icon || '🏅'} ${x.name}`).join(' • ') || 'لا توجد شارات';
+  const badges = (cosmetics.items || cosmetics.badges || []).filter(x => x.type === 'badge').map(x => `${x.metadata?.icon || '🏅'} ${x.name}`).join(' • ') || 'لا توجد شارات';
   const title = cosmetics.selectedTitle?.name || 'بدون لقب';
   const roles = (cosmetics.roles || []).map(x => x === 'developer' ? '🛠️ مطور' : x).join(' • ') || 'عضو';
   const embed = new EmbedBuilder().setColor(0x42e0c0).setTitle('👤 بروفايل LEGACY')
@@ -125,13 +126,6 @@ async function handleButton(interaction) {
     const menu = new StringSelectMenuBuilder().setCustomId('legacy:shop:select').setPlaceholder('اختر عنصراً للشراء').addOptions(rows.slice(0, 25).map(x => new StringSelectMenuOptionBuilder().setLabel(String(x.name).slice(0, 100)).setValue(x.id).setDescription(`${x.price} نقطة`)));
     return interaction.reply({ content: '🛒 **متجر LEGACY**\nاختر العنصر ليتم شراؤه مباشرة.', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
   }
-}
-
-async function handleAdmin(interaction) {
-  if (!admins.has(interaction.user.id)) return interaction.reply({ content: 'هذه اللوحة للإدارة فقط.', ephemeral: true });
-  const section = interaction.values?.[0];
-  const labels = { users: '👥 المستخدمون', points: '🪙 النقاط', catalog: '🛒 المتجر والكتالوج', premium: '💎 Premium', codes: '🎁 الأكواد والجوائز', audit: '📝 السجلات', stats: '📊 الإحصائيات' };
-  return interaction.reply({ content: `**${labels[section] || 'LEGACY'}**\nهذا القسم صار مربوطاً بالنظام. الإدارة المتقدمة تتم عبر لوحة الإدارة داخل Discord أو الموقع.`, ephemeral: true });
 }
 
 async function handleModal(interaction) {
@@ -161,10 +155,14 @@ function createClient() {
   client.on('interactionCreate', async interaction => {
     if (!interaction.customId?.startsWith('legacy:')) return;
     try {
-      if (interaction.isStringSelectMenu() && interaction.customId === 'legacy:admin') return handleAdmin(interaction);
+      if (interaction.isStringSelectMenu() && interaction.customId === 'legacy:admin') return handleAdminInteraction(interaction, { internal, adminId: interaction.user.id });
       if (interaction.isStringSelectMenu() && interaction.customId === 'legacy:shop:select') {
         const result = await internal(`/internal/user/${interaction.user.id}/shop/${interaction.values[0]}/buy`, { method: 'POST' });
         return interaction.reply({ content: `✅ تم شراء **${result.item?.name || 'العنصر'}** وإضافته إلى حقيبتك.`, ephemeral: true });
+      }
+      if (interaction.isModalSubmit() && interaction.customId.startsWith('legacy:admin:')) {
+        const handled = await handleAdminModal(interaction, { internal, adminId: interaction.user.id });
+        if (handled) return;
       }
       if (interaction.isButton()) return handleButton(interaction);
       if (interaction.isModalSubmit()) return handleModal(interaction);
