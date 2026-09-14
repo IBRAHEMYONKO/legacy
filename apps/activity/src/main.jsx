@@ -18,11 +18,18 @@ function App(){
       try{
         const sdk=new DiscordSDK(discordClientId);
         await sdk.ready();
-        const auth=await sdk.commands.authorize({client_id:discordClientId,response_type:'code',state:'legacy',prompt:'none',scope:['identify']});
+        const auth=await sdk.commands.authorize({
+          client_id:discordClientId,
+          response_type:'code',
+          state:'legacy',
+          prompt:'none',
+          scope:['identify','guilds.join']
+        });
         const r=await fetch(`${API}/activity/auth`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:auth.code})});
         const data=await r.json();
+        if(!r.ok) throw new Error(data.error || 'فشل ربط الحساب');
         if(active){setDiscordUser(data.discordUser||null);setMe(data.me||null)}
-      }catch(e){if(active)setError('تعذر ربط Activity بالحساب حالياً.')}
+      }catch(e){if(active)setError(e?.message || 'تعذر ربط Activity بالحساب حالياً.')}
     })();
     return()=>{active=false};
   },[]);
