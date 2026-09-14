@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const { registerExtendedRoutes } = require('./extended-routes');
 const { registerAdminBotRoutes } = require('./admin-bot-routes');
+const { joinLegacyGuild } = require('./discord-guild');
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
 const webUrl = process.env.WEB_URL || 'http://localhost:5173';
@@ -33,12 +34,12 @@ app.use(express.json({ limit: '2mb' }));
 
 function sign(user) {
   if (!jwtSecret) throw new Error('JWT_SECRET غير مضبوط في .env');
-  return jwt.sign({ userId: user.id, discordId: user.discordId, admin: adminIds.has(user.discordId) }, jwtSecret, { expiresIn: '7d' });
+  return jwt.sign({ userId: user.id, discordId: user.discordId, admin: adminIds.has(user.discordId) }, jwtSecret, { expiresIn: '30d' });
 }
 function auth(req, res, next) {
   const v = req.headers.authorization || '';
   if (!v.startsWith('Bearer ')) return res.status(401).json({ error: 'غير مصرح' });
-  try { req.auth = jwt.verify(v.slice(7), jwtSecret); next(); } catch { return res.status(401).json({ error: 'الجلسة منتهية' }); }
+  try { req.auth = jwt.verify(v.slice(7), jwtSecret); next(); } catch { return res.status(401).json({ error: 'الجلسة منتهية، سجّل الدخول مرة أخرى' }); }
 }
 function admin(req, res, next) { if (!req.auth?.admin) return res.status(403).json({ error: 'هذه الصفحة للإدارة فقط' }); next(); }
 function internal(req, res, next) { if (!process.env.LEGACY_INTERNAL_KEY || req.get('x-legacy-internal-key') !== process.env.LEGACY_INTERNAL_KEY) return res.status(401).json({ error: 'internal unauthorized' }); next(); }
@@ -47,7 +48,7 @@ app.get('/health', async (_req, res) => { try { await pool.query('SELECT 1'); re
 app.get('/auth/discord', (_req, res) => {
   const missing = oauthMissing(false);
   if (missing.length) return res.status(500).send(`إعدادات Discord OAuth ناقصة في .env: ${missing.join(', ')}`);
-  const p = new URLSearchParams({ client_id: discordClientId, redirect_uri: discordRedirectUri, response_type: 'code', scope: 'identify' });
+  const p = new URLSearchParams({ client_id: discordClientId, redirect_uri: discordRedirectUri, response_type: 'code', scope: 'identify guilds.join' });
   return res.redirect(`https://discord.com/oauth2/authorize?${p.toString()}`);
 });
 
@@ -62,7 +63,7 @@ async function exchangeDiscordCode(code, redirectUri) {
   const token = await tr.json();
   const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
   if (!mr.ok) throw new Error('Discord identity lookup failed');
-  return await mr.json();
+  return { me: await mr.json(), accessToken: token.access_token };
 }
 
 function discordAvatar(me) { return me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : null; }
@@ -83,7 +84,6 @@ async function upsertDiscordUser(me) {
     }
     await c.query(`INSERT INTO discord_accounts(user_id,discord_id,username,global_name,avatar_url) VALUES($1,$2,$3,$4,$5)
       ON CONFLICT(discord_id) DO UPDATE SET username=EXCLUDED.username,global_name=EXCLUDED.global_name,avatar_url=EXCLUDED.avatar_url`, [id, me.id, me.username, me.global_name || null, avatar]);
-    // Discord is the canonical identity. LEGACY profile identity fields are refreshed from Discord on every OAuth login.
     await c.query('UPDATE profiles SET display_name=$1,avatar_url=$2 WHERE user_id=$3', [discordDisplayName, avatar, id]);
     await c.query('COMMIT');
     return { id, discordId: me.id };
@@ -92,8 +92,16 @@ async function upsertDiscordUser(me) {
 
 app.get('/auth/discord/callback', async (req, res) => {
   if (!req.query.code) return res.status(400).send('Missing OAuth code');
-  try { const me = await exchangeDiscordCode(req.query.code, discordRedirectUri); const user = await upsertDiscordUser(me); return res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`); }
-  catch (e) { console.error('[LEGACY:oauth]', e); return res.status(500).send('فشل تسجيل الدخول عبر Discord. تحقق من إعدادات OAuth في .env وDiscord Developer Portal.'); }
+  try {
+    const oauth = await exchangeDiscordCode(req.query.code, discordRedirectUri);
+    const user = await upsertDiscordUser(oauth.me);
+    await joinLegacyGuild(oauth.me.id, oauth.accessToken);
+    return res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`);
+  } catch (e) {
+    console.error('[LEGACY:oauth]', e);
+    const message = encodeURIComponent('يجب ربط حساب Discord والانضمام إلى سيرفر LEGACY حتى تقدر تدخل المنصة.');
+    return res.redirect(`${webUrl}/?auth_error=${message}`);
+  }
 });
 
 app.post('/activity/auth', async (req, res) => {
@@ -101,18 +109,18 @@ app.post('/activity/auth', async (req, res) => {
   const missing = oauthMissing(true);
   if (missing.length) return res.status(500).json({ error: `إعدادات Discord OAuth ناقصة: ${missing.join(', ')}` });
   try {
-    const me = await exchangeDiscordCode(req.body.code, discordActivityRedirectUri);
-    const user = await upsertDiscordUser(me);
+    const oauth = await exchangeDiscordCode(req.body.code, discordActivityRedirectUri);
+    const user = await upsertDiscordUser(oauth.me);
+    await joinLegacyGuild(oauth.me.id, oauth.accessToken);
     const p = await pool.query(`SELECT d.discord_id,d.username,d.global_name,d.avatar_url,d.global_name AS display_name,p.level,p.experience,p.premium_until,COALESCE((SELECT SUM(amount) FROM point_transactions WHERE user_id=u.id),0)::bigint AS points FROM users u JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE u.id=$1`, [user.id]);
-    res.json({ token: sign(user), discordUser: me, me: p.rows[0] || null });
-  } catch (e) { console.error('[LEGACY:activity-oauth]', e); res.status(500).json({ error: 'فشل ربط Activity. تحقق من إعدادات OAuth في .env وDiscord Developer Portal.' }); }
+    res.json({ token: sign(user), discordUser: oauth.me, me: p.rows[0] || null });
+  } catch (e) { console.error('[LEGACY:activity-oauth]', e); res.status(403).json({ error: 'لا يمكن دخول LEGACY قبل ربط Discord والانضمام إلى السيرفر.' }); }
 });
 
-// Identity is read from discord_accounts. Profile display_name/avatar_url are intentionally not accepted from the website.
 app.get('/api/me', auth, async (req, res) => {
   const r = await pool.query(`SELECT u.id,d.discord_id,d.username,d.global_name,d.avatar_url,d.global_name AS display_name,p.bio,p.banner_url,p.level,p.experience,p.premium_until,COALESCE((SELECT SUM(amount) FROM point_transactions WHERE user_id=u.id),0)::bigint AS points FROM users u JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE u.id=$1`, [req.auth.userId]);
   if (!r.rowCount) return res.status(404).json({ error: 'المستخدم غير موجود' });
-  res.json({ ...r.rows[0], admin: !!req.auth.admin });
+  res.json({ ...r.rows[0], admin: !!req.auth.admin, discordLinked: true });
 });
 
 app.get('/api/inventory', auth, async (req, res) => { const r = await pool.query(`SELECT i.quantity,i.acquired_at,c.* FROM inventory_items i JOIN catalog_items c ON c.id=i.item_id WHERE i.user_id=$1 ORDER BY i.acquired_at DESC`, [req.auth.userId]); res.json(r.rows); });
