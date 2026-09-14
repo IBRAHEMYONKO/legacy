@@ -1,6 +1,6 @@
 # LEGACY
 
-LEGACY is one social platform with three clients sharing one backend, one PostgreSQL database and one Discord identity:
+LEGACY is one social platform with three clients sharing one backend, one database and one Discord identity:
 
 - **Discord Bot** — the single `legacy` entry point for normal users and administrators.
 - **Website** — the main social/profile/economy experience.
@@ -14,16 +14,17 @@ Deployment providers are intentionally ignored while the product is being built.
 
 ```text
 Website :5173 ─┐
-Activity :5174 ─┼─> LEGACY API :4000 ─> PostgreSQL / Supabase
+Activity :5174 ─┼─> LEGACY API :4000 ─> Embedded PostgreSQL (PGlite)
 Discord Bot ────┘
 ```
+
+Local development uses PGlite, an embedded PostgreSQL-compatible database. You do **not** need to install PostgreSQL separately. The database persists under `backend/data/legacy` and is ignored by Git.
 
 ### Start everything with one command
 
 Requirements:
 
 - Node.js 24+
-- PostgreSQL or Supabase
 - A Discord application with OAuth2 configured
 - Message Content Intent enabled for the bot
 
@@ -33,9 +34,16 @@ Setup:
 npm install
 ```
 
-Copy `.env.example` to `.env` and fill the real credentials. Never commit `.env`.
+Copy `.env.example` to `.env` and fill the real Discord credentials. Never commit `.env`.
 
-Initialize the database with `database/schema.sql`.
+For local development keep:
+
+```env
+LEGACY_DB_MODE=local
+LEGACY_DB_PATH=backend/data/legacy
+```
+
+The API automatically creates and initializes the local database from `database/schema.sql` on first start.
 
 Then run:
 
@@ -50,6 +58,17 @@ For a production-style local preview after building the clients:
 ```bash
 npm start
 ```
+
+### PostgreSQL / Supabase later
+
+When you want to use a normal PostgreSQL server or Supabase, change:
+
+```env
+LEGACY_DB_MODE=postgres
+DATABASE_URL=postgresql://...
+```
+
+The application SQL remains PostgreSQL-compatible, so moving from local PGlite to PostgreSQL/Supabase does not require changing the frontend or API contracts.
 
 ### Discord OAuth2 local callback
 
@@ -98,7 +117,7 @@ apps/
   web/       React/Vite website
   activity/  React/Vite Discord Activity
 backend/     Express API + Discord OAuth + internal bot API
-database/    PostgreSQL schema
+database/    PostgreSQL-compatible schema
 shared/      shared contracts
 index.js     one-command local process runner
 docs/        architecture, specs and implementation plans
@@ -109,7 +128,8 @@ docs/        architecture, specs and implementation plans
 Implemented across the current build:
 
 - Monorepo/workspaces
-- PostgreSQL schema for accounts, profiles, points, inventory, catalog, purchases, codes, friendships, groups, notifications, conversations, blocks and audit logs
+- PostgreSQL-compatible schema for accounts, profiles, points, inventory, catalog, purchases, codes, friendships, groups, notifications, conversations, blocks and audit logs
+- Persistent embedded local database for development
 - Discord OAuth2 website login
 - Shared JWT account session
 - Activity authentication endpoint
