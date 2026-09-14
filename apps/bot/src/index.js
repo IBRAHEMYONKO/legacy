@@ -1,40 +1,187 @@
-require('dotenv').config({ path: require('path').join(__dirname, '../../../.env') });
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { registerAdminUI } = require('./admin-ui');
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent], partials: [Partials.Channel] });
-const admins = new Set((process.env.LEGACY_ADMIN_IDS || '').split(',').map(x=>x.trim()).filter(Boolean));
-const API = process.env.LEGACY_API_URL || `http://localhost:${process.env.API_PORT || 4000}`;
+'use strict';
+
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
+
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+
+const API = (process.env.LEGACY_API_URL || `http://localhost:${process.env.API_PORT || 4000}`).replace(/\/$/, '');
 const INTERNAL_KEY = process.env.LEGACY_INTERNAL_KEY || '';
-async function internal(path, options={}) { const r=await fetch(`${API}${path}`,{...options,headers:{'Content-Type':'application/json','x-legacy-internal-key':INTERNAL_KEY,...(options.headers||{})}}); const data=await r.json().catch(()=>({})); if(!r.ok) throw new Error(data.error||'فشل الاتصال بالخادم'); return data; }
-function normalMenu(){return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('legacy:profile').setLabel('بروفايلي').setEmoji('👤').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('legacy:premium').setLabel('اشتراكي').setEmoji('💎').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('legacy:points').setLabel('نقاطي').setEmoji('🪙').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('legacy:inventory').setLabel('حقيبتي').setEmoji('🎒').setStyle(ButtonStyle.Secondary));}
-function normalMenu2(){return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('legacy:shop').setLabel('المتجر').setEmoji('🛒').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('legacy:leaderboard').setLabel('المتصدرين').setEmoji('🏆').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('legacy:redeem').setLabel('كود').setEmoji('🎁').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('legacy:social').setLabel('الأصدقاء').setEmoji('👥').setStyle(ButtonStyle.Secondary));}
-function adminMenu(){return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('legacy:admin').setPlaceholder('اختر قسم الإدارة').addOptions(['users','إدارة المستخدمين','👥'],['points','النقاط','🪙'],['inventory','الحقيبة والعناصر','🎒'],['catalog','المتجر والكتالوج','🛒'],['premium','Premium والاشتراكات','💎'],['codes','الأكواد والجوائز','🔑'],['groups','المجموعات والصلاحيات','👑'],['stats','الإحصائيات والمتصدرين','📊'],['audit','السجلات والتدقيق','📝'],['settings','إعدادات LEGACY','⚙️'].map(([value,label,emoji])=>new StringSelectMenuOptionBuilder().setLabel(label).setValue(value).setEmoji(emoji))));}
-function home(user,isAdmin){const e=new EmbedBuilder().setTitle(isAdmin?'LEGACY | لوحة الإدارة':'LEGACY').setDescription(isAdmin?'لوحة التحكم الكاملة للنظام. من هنا تتحكم بالمستخدمين والنقاط والمحتوى والسجلات.':'حسابك في LEGACY — كل شيء من قائمة واحدة.').setThumbnail(user.displayAvatarURL({size:256})).setColor(0x5865F2).setFooter({text:isAdmin?'صلاحيات الإدارة مفعلة':'LEGACY • الحساب المشترك'});return isAdmin?{embeds:[e],components:[adminMenu()]}:{embeds:[e],components:[normalMenu(),normalMenu2()]};}
-function adminSection(section){const map={users:['👥 إدارة المستخدمين','ابحث عن مستخدم عبر Discord ID.','legacy:admin:user'],points:['🪙 إدارة النقاط','إضافة أو خصم نقاط مع تسجيل العملية.','legacy:admin:points'],inventory:['🎒 إدارة الحقيبة والعناصر','مراجعة حقيبة مستخدم.','legacy:admin:inventory'],catalog:['🛒 إدارة المتجر والكتالوج','إضافة عناصر ديناميكية للمتجر.','legacy:admin:catalog'],premium:['💎 Premium والاشتراكات','إدارة حالة Premium.','legacy:admin:premium'],codes:['🔑 الأكواد والجوائز','إنشاء أكواد وجوائز ديناميكية.','legacy:admin:codes'],groups:['👑 المجموعات والصلاحيات','إدارة المجموعات والأدوار.','legacy:admin:groups'],stats:['📊 الإحصائيات والمتصدرين','مراقبة أرقام LEGACY.','legacy:admin:stats'],audit:['📝 السجلات والتدقيق','عرض آخر العمليات الإدارية.','legacy:admin:audit'],settings:['⚙️ إعدادات LEGACY','إعدادات النظام العامة.','legacy:admin:settings']};const [title,desc,id]=map[section]||['LEGACY','قسم غير معروف.','legacy:admin:settings'];return{content:`**${title}**\n${desc}`,components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(id).setLabel('فتح القسم').setStyle(ButtonStyle.Primary))],ephemeral:true};}
-client.once('ready',()=>console.log(`LEGACY Bot ONLINE as ${client.user.tag}`));
-client.on('messageCreate',async m=>{if(m.author.bot||m.content.trim().toLowerCase()!=='legacy')return;await m.reply(home(m.author,admins.has(m.author.id)));});
-client.on('interactionCreate',async i=>{if(!i.customId?.startsWith('legacy:'))return;try{
-if(i.isStringSelectMenu()&&i.customId==='legacy:admin'){if(!admins.has(i.user.id))return i.reply({content:'هذه اللوحة للإدارة فقط.',ephemeral:true});return i.reply(adminSection(i.values[0]));}
-if(i.isStringSelectMenu()&&i.customId==='legacy:shop:select'){const itemId=i.values[0];const item=await internal(`/internal/user/${i.user.id}/shop/${itemId}/buy`,{method:'POST'});return i.reply({content:`✅ تم شراء **${item.item.name}** وإضافته إلى حقيبتك.`,ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:admin:user')return i.showModal(new ModalBuilder().setCustomId('legacy:modal:user').setTitle('البحث عن مستخدم').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('discordId').setLabel('Discord ID').setStyle(TextInputStyle.Short).setRequired(true))));
-if(i.isButton()&&i.customId==='legacy:admin:points')return i.showModal(new ModalBuilder().setCustomId('legacy:modal:points').setTitle('تعديل النقاط').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('target').setLabel('Discord ID للمستخدم').setStyle(TextInputStyle.Short).setRequired(true)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount').setLabel('النقاط (+ / -)').setStyle(TextInputStyle.Short).setRequired(true)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('السبب').setStyle(TextInputStyle.Short).setRequired(true))));
-if(i.isButton()&&i.customId==='legacy:admin:inventory')return i.showModal(new ModalBuilder().setCustomId('legacy:modal:inventory').setTitle('حقيبة مستخدم').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('discordId').setLabel('Discord ID').setStyle(TextInputStyle.Short).setRequired(true))));
-if(i.isButton()&&i.customId==='legacy:admin:audit'){const rows=await internal('/internal/audit');return i.reply({content:rows.length?rows.slice(0,10).map(x=>`• ${x.action} — ${new Date(x.created_at).toLocaleString('ar')}`).join('\n'):'لا توجد سجلات بعد.',ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:admin:catalog')return i.showModal(new ModalBuilder().setCustomId('legacy:modal:catalog').setTitle('إضافة عنصر للمتجر').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('type').setLabel('النوع').setStyle(TextInputStyle.Short).setRequired(true)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('slug').setLabel('المعرف الفريد').setStyle(TextInputStyle.Short).setRequired(true)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('name').setLabel('اسم العنصر').setStyle(TextInputStyle.Short).setRequired(true)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('price').setLabel('السعر بالنقاط').setStyle(TextInputStyle.Short).setRequired(true))));
-if(i.isModalSubmit()&&i.customId==='legacy:modal:user'){if(!admins.has(i.user.id))return i.reply({content:'الإدارة فقط.',ephemeral:true});const u=await internal(`/internal/user/${encodeURIComponent(i.fields.getTextInputValue('discordId').trim())}`);return i.reply({embeds:[new EmbedBuilder().setTitle('👤 ملف LEGACY').setDescription(`**${u.display_name||u.global_name||u.username}**\nDiscord: ${u.discord_id}\nالمستوى: ${u.level}\nالنقاط: ${u.points}\nPremium: ${u.premium_until?'فعال':'غير مشترك'}`).setThumbnail(u.avatar_url||undefined)],ephemeral:true});}
-if(i.isModalSubmit()&&i.customId==='legacy:modal:points'){if(!admins.has(i.user.id))return i.reply({content:'الإدارة فقط.',ephemeral:true});const target=i.fields.getTextInputValue('target').trim(),amount=Number(i.fields.getTextInputValue('amount')),reason=i.fields.getTextInputValue('reason').trim();await internal('/internal/admin/points',{method:'POST',body:JSON.stringify({actorDiscordId:i.user.id,targetDiscordId:target,amount,reason})});return i.reply({content:`✅ تم تعديل النقاط للمستخدم <@${target}> بمقدار **${amount}**.`,ephemeral:true});}
-if(i.isModalSubmit()&&i.customId==='legacy:modal:inventory'){if(!admins.has(i.user.id))return i.reply({content:'الإدارة فقط.',ephemeral:true});const rows=await internal(`/internal/user/${i.fields.getTextInputValue('discordId').trim()}/inventory`);return i.reply({content:rows.length?`🎒 الحقيبة:\n${rows.map(x=>`• ${x.name} × ${x.quantity}`).join('\n')}`:'الحقيبة فارغة.',ephemeral:true});}
-if(i.isModalSubmit()&&i.customId==='legacy:modal:catalog'){if(!admins.has(i.user.id))return i.reply({content:'الإدارة فقط.',ephemeral:true});const type=i.fields.getTextInputValue('type').trim(),slug=i.fields.getTextInputValue('slug').trim(),name=i.fields.getTextInputValue('name').trim(),price=Number(i.fields.getTextInputValue('price'));if(!Number.isSafeInteger(price)||price<0)return i.reply({content:'السعر غير صحيح.',ephemeral:true});await internal('/internal/admin/catalog',{method:'POST',body:JSON.stringify({actorDiscordId:i.user.id,type,slug,name,price})});return i.reply({content:`✅ تمت إضافة **${name}** إلى الكتالوج.`,ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:profile'){const [u,c]=await Promise.all([internal(`/internal/user/${i.user.id}`),internal(`/internal/user/${i.user.id}/cosmetics`)]);const badges=c.items.filter(x=>x.type==='badge').map(x=>x.metadata?.icon||'🏅').join(' ')||'لا توجد';const title=c.selectedTitle?.name||'بدون لقب';const roles=c.roles.length?c.roles.map(x=>x==='developer'?'🛠️ مطور':x).join('، '):'عضو';return i.reply({embeds:[new EmbedBuilder().setTitle('👤 بروفايل LEGACY').setDescription(`**${u.display_name||u.global_name||u.username}**\n@${u.username}\n\n🏷️ **اللقب:** ${title}\n🏅 **الشارات:** ${badges}\n🎖️ **الرتبة:** ${roles}\n⭐ **المستوى:** ${u.level}\n🪙 **النقاط:** ${u.points}\n💎 **Premium:** ${u.premium_until?'فعال':'غير مشترك'}\n\n${u.bio||'لا توجد نبذة بعد.'}`).setThumbnail(u.avatar_url||undefined).setColor(0x5865F2)],ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:points'){const u=await internal(`/internal/user/${i.user.id}`);return i.reply({content:`🪙 **نقاطك:** ${u.points}\n⭐ **مستواك:** ${u.level}\n📈 **خبرتك:** ${u.experience}`,ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:premium'){const u=await internal(`/internal/user/${i.user.id}`);return i.reply({content:`💎 **Premium:** ${u.premium_until?'فعال حتى '+new Date(u.premium_until).toLocaleString('ar'):'غير مشترك'}`,ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:inventory'){const inv=await internal(`/internal/user/${i.user.id}/inventory`);return i.reply({content:inv.length?`🎒 **حقيبتك:**\n${inv.map(x=>`• ${x.name} × ${x.quantity}`).join('\n')}`:'🎒 حقيبتك فارغة.',ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:shop'){const rows=await internal('/internal/shop');if(!rows.length)return i.reply({content:'🛒 المتجر فارغ حالياً.',ephemeral:true});const options=rows.slice(0,25).map(x=>new StringSelectMenuOptionBuilder().setLabel(String(x.name).slice(0,100)).setValue(x.id).setDescription(`${x.price} نقطة`));return i.reply({content:'🛒 **متجر LEGACY**\nاختر العنصر وسيتم خصم النقاط وإضافته لحقيبتك.',components:[new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('legacy:shop:select').setPlaceholder('اختر عنصراً للشراء').addOptions(options))],ephemeral:true});}
-if(i.isButton()&&i.customId==='legacy:redeem')return i.showModal(new ModalBuilder().setCustomId('legacy:modal:redeem').setTitle('استرداد كود LEGACY').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('code').setLabel('الكود').setStyle(TextInputStyle.Short).setRequired(true))));
-if(i.isModalSubmit()&&i.customId==='legacy:modal:redeem'){const code=i.fields.getTextInputValue('code').trim();const data=await internal(`/internal/user/${i.user.id}/redeem`,{method:'POST',body:JSON.stringify({code})});return i.reply({content:`✅ تم استرداد الكود بنجاح.\n${data.rewards?.map(x=>x.type==='points'?`🪙 +${x.amount} نقطة`:x.type==='premium_days'?`💎 Premium ${x.days} يوم`:'🎁 مكافأة').join('\n')||''}`,ephemeral:true});}
-const action=i.customId.split(':')[1];
-if(action==='leaderboard'){const rows=await internal('/internal/shop').catch(()=>[]);const r=await fetch(`${API}/api/leaderboards/points`);const data=await r.json();return i.reply({content:data.length?`🏆 **المتصدرين**\n${data.slice(0,10).map((x,n)=>`${n+1}. ${x.global_name||x.username} — ${x.points}`).join('\n')}`:'لا توجد بيانات.',ephemeral:true});}
-if(action==='social')return i.reply({content:'👥 نظام الأصدقاء مرتبط بنفس حساب LEGACY على الموقع.',ephemeral:true});
-}catch(e){console.error(e);if(!i.replied&&!i.deferred)await i.reply({content:`❌ ${e.message}`,ephemeral:true});}});
-registerAdminUI(client,{internal,admins});
-if(!process.env.DISCORD_BOT_TOKEN)console.warn('DISCORD_BOT_TOKEN is missing');else client.login(process.env.DISCORD_BOT_TOKEN);
+const admins = new Set((process.env.LEGACY_ADMIN_IDS || '').split(',').map(x => x.trim()).filter(Boolean));
+
+function isLegacyCommand(content) {
+  return String(content || '').trim().toLowerCase() === 'legacy';
+}
+
+function getBotStatus(client) {
+  return {
+    tag: client?.user?.tag || null,
+    ping: Number(client?.ws?.ping ?? -1),
+    ready: Boolean(client?.readyAt)
+  };
+}
+
+async function internal(endpoint, options = {}) {
+  const response = await fetch(`${API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-legacy-internal-key': INTERNAL_KEY,
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `API ${response.status}`);
+  return data;
+}
+
+function normalRows() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('legacy:profile').setLabel('بروفايلي').setEmoji('👤').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('legacy:points').setLabel('نقاطي').setEmoji('🪙').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('legacy:shop').setLabel('المتجر').setEmoji('🛒').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('legacy:inventory').setLabel('حقيبتي').setEmoji('🎒').setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('legacy:leaderboard').setLabel('المتصدرين').setEmoji('🏆').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('legacy:premium').setLabel('Premium').setEmoji('💎').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('legacy:redeem').setLabel('استرداد كود').setEmoji('🎁').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('legacy:social').setLabel('الأصدقاء').setEmoji('👥').setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function adminRow() {
+  const options = [
+    ['users', 'المستخدمون', '👥'], ['points', 'النقاط', '🪙'], ['catalog', 'المتجر', '🛒'],
+    ['premium', 'Premium', '💎'], ['codes', 'الأكواد', '🎁'], ['audit', 'السجلات', '📝'], ['stats', 'الإحصائيات', '📊']
+  ];
+  return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('legacy:admin').setPlaceholder('اختر قسم الإدارة').addOptions(options.map(([value, label, emoji]) => new StringSelectMenuOptionBuilder().setValue(value).setLabel(label).setEmoji(emoji))))];
+}
+
+function homePayload(user, admin) {
+  const embed = new EmbedBuilder()
+    .setTitle(admin ? 'LEGACY • مركز الإدارة' : 'LEGACY • مركز حسابك')
+    .setDescription(admin ? 'إدارة المستخدمين والاقتصاد والمتجر وPremium والأكواد من Discord.' : 'حسابك في LEGACY صار متصل مباشرة بالموقع. اختر أي قسم من الأزرار بالأسفل.')
+    .setThumbnail(user.displayAvatarURL({ size: 256 }))
+    .setColor(admin ? 0xe4bd62 : 0x42e0c0)
+    .addFields(
+      { name: 'Discord', value: `<@${user.id}>`, inline: true },
+      { name: 'الحالة', value: '● متصل', inline: true },
+      { name: 'الأمر', value: '`legacy`', inline: true }
+    )
+    .setFooter({ text: admin ? 'صلاحيات الإدارة مفعلة' : 'LEGACY • الحساب المشترك' });
+  return { embeds: [embed], components: admin ? adminRow() : normalRows() };
+}
+
+async function sendProfile(interaction) {
+  const [user, cosmetics] = await Promise.all([
+    internal(`/internal/user/${interaction.user.id}`),
+    internal(`/internal/user/${interaction.user.id}/cosmetics`)
+  ]);
+  const badges = (cosmetics.items || []).filter(x => x.type === 'badge').map(x => `${x.metadata?.icon || '🏅'} ${x.name}`).join(' • ') || 'لا توجد شارات';
+  const title = cosmetics.selectedTitle?.name || 'بدون لقب';
+  const roles = (cosmetics.roles || []).map(x => x === 'developer' ? '🛠️ مطور' : x).join(' • ') || 'عضو';
+  const embed = new EmbedBuilder().setColor(0x42e0c0).setTitle('👤 بروفايل LEGACY')
+    .setThumbnail(user.avatar_url || interaction.user.displayAvatarURL({ size: 256 }))
+    .setDescription(`**${user.display_name || user.global_name || user.username}**\n@${user.username || interaction.user.username}\n\n🏷️ **اللقب:** ${title}\n🏅 **الشارات:** ${badges}\n🎖️ **الرتبة:** ${roles}\n⭐ **المستوى:** ${user.level || 1}\n🪙 **النقاط:** ${Number(user.points || 0).toLocaleString('ar-IQ')}\n💎 **Premium:** ${user.premium_until ? 'فعال' : 'غير مشترك'}\n\n${user.bio || 'لا توجد نبذة بعد.'}`);
+  return interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleButton(interaction) {
+  const id = interaction.customId;
+  if (id === 'legacy:profile') return sendProfile(interaction);
+  if (id === 'legacy:points') { const u = await internal(`/internal/user/${interaction.user.id}`); return interaction.reply({ content: `🪙 **نقاطك:** ${Number(u.points || 0).toLocaleString('ar-IQ')}\n⭐ **مستواك:** ${u.level || 1}\n📈 **خبرتك:** ${u.experience || 0}`, ephemeral: true }); }
+  if (id === 'legacy:premium') { const u = await internal(`/internal/user/${interaction.user.id}`); return interaction.reply({ content: u.premium_until ? `💎 Premium فعال حتى **${new Date(u.premium_until).toLocaleString('ar-IQ')}**.` : '💎 حسابك حالياً بدون Premium.', ephemeral: true }); }
+  if (id === 'legacy:inventory') { const rows = await internal(`/internal/user/${interaction.user.id}/inventory`); return interaction.reply({ content: rows.length ? `🎒 **حقيبتك**\n${rows.map(x => `• ${x.name} × ${x.quantity}`).join('\n')}` : '🎒 حقيبتك فارغة حالياً.', ephemeral: true }); }
+  if (id === 'legacy:leaderboard') { const response = await fetch(`${API}/api/leaderboards/points`); const rows = await response.json().catch(() => []); const list = (Array.isArray(rows) ? rows : rows.items || []).slice(0, 10); return interaction.reply({ content: list.length ? `🏆 **المتصدرين**\n${list.map((x, i) => `${i + 1}. **${x.display_name || x.global_name || x.username || 'عضو'}** — ${Number(x.points || 0).toLocaleString('ar-IQ')} نقطة`).join('\n')}` : 'لا توجد بيانات للمتصدرين بعد.', ephemeral: true }); }
+  if (id === 'legacy:social') return interaction.reply({ content: '👥 قسم الأصدقاء مربوط بالموقع. افتح LEGACY من المتصفح لإدارة الشبكة الاجتماعية.', ephemeral: true });
+  if (id === 'legacy:redeem') return interaction.showModal(new ModalBuilder().setCustomId('legacy:modal:redeem').setTitle('استرداد كود LEGACY').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('code').setLabel('كود الجائزة').setPlaceholder('اكتب الكود هنا').setStyle(TextInputStyle.Short).setRequired(true))));
+  if (id === 'legacy:shop') {
+    const rows = await internal('/internal/shop');
+    if (!rows.length) return interaction.reply({ content: '🛒 المتجر فارغ حالياً.', ephemeral: true });
+    const menu = new StringSelectMenuBuilder().setCustomId('legacy:shop:select').setPlaceholder('اختر عنصراً للشراء').addOptions(rows.slice(0, 25).map(x => new StringSelectMenuOptionBuilder().setLabel(String(x.name).slice(0, 100)).setValue(x.id).setDescription(`${x.price} نقطة`)));
+    return interaction.reply({ content: '🛒 **متجر LEGACY**\nاختر العنصر ليتم شراؤه مباشرة.', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+  }
+}
+
+async function handleAdmin(interaction) {
+  if (!admins.has(interaction.user.id)) return interaction.reply({ content: 'هذه اللوحة للإدارة فقط.', ephemeral: true });
+  const section = interaction.values?.[0];
+  const labels = { users: '👥 المستخدمون', points: '🪙 النقاط', catalog: '🛒 المتجر والكتالوج', premium: '💎 Premium', codes: '🎁 الأكواد والجوائز', audit: '📝 السجلات', stats: '📊 الإحصائيات' };
+  return interaction.reply({ content: `**${labels[section] || 'LEGACY'}**\nهذا القسم صار مربوطاً بالنظام. الإدارة المتقدمة تتم عبر لوحة الإدارة داخل Discord أو الموقع.`, ephemeral: true });
+}
+
+async function handleModal(interaction) {
+  if (interaction.customId !== 'legacy:modal:redeem') return;
+  const code = interaction.fields.getTextInputValue('code').trim();
+  try {
+    const result = await internal(`/internal/user/${interaction.user.id}/redeem`, { method: 'POST', body: JSON.stringify({ code }) });
+    return interaction.reply({ content: `🎉 تم استرداد الكود بنجاح!\n${result.message || 'تمت إضافة الجائزة إلى حسابك.'}`, ephemeral: true });
+  } catch (error) {
+    return interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+  }
+}
+
+function createClient() {
+  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+  client.once('ready', () => {
+    const status = getBotStatus(client);
+    console.log(`[LEGACY:bot] ONLINE as ${status.tag} | ping=${status.ping}ms`);
+  });
+  client.on('error', error => console.error('[LEGACY:bot] Discord error:', error.message));
+  client.on('warn', message => console.warn('[LEGACY:bot] Discord warning:', message));
+  client.on('messageCreate', async message => {
+    if (message.author.bot || !isLegacyCommand(message.content)) return;
+    try { await message.reply(homePayload(message.author, admins.has(message.author.id))); }
+    catch (error) { console.error('[LEGACY:bot] command error:', error); }
+  });
+  client.on('interactionCreate', async interaction => {
+    if (!interaction.customId?.startsWith('legacy:')) return;
+    try {
+      if (interaction.isStringSelectMenu() && interaction.customId === 'legacy:admin') return handleAdmin(interaction);
+      if (interaction.isStringSelectMenu() && interaction.customId === 'legacy:shop:select') {
+        const result = await internal(`/internal/user/${interaction.user.id}/shop/${interaction.values[0]}/buy`, { method: 'POST' });
+        return interaction.reply({ content: `✅ تم شراء **${result.item?.name || 'العنصر'}** وإضافته إلى حقيبتك.`, ephemeral: true });
+      }
+      if (interaction.isButton()) return handleButton(interaction);
+      if (interaction.isModalSubmit()) return handleModal(interaction);
+    } catch (error) {
+      console.error('[LEGACY:bot] interaction error:', error);
+      const payload = { content: `❌ ${error.message || 'حدث خطأ غير متوقع.'}`, ephemeral: true };
+      if (interaction.replied || interaction.deferred) await interaction.followUp(payload).catch(() => {}); else await interaction.reply(payload).catch(() => {});
+    }
+  });
+  return client;
+}
+
+async function start() {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) throw new Error('DISCORD_BOT_TOKEN غير موجود في ملف .env');
+  const client = createClient();
+  await client.login(token);
+  return client;
+}
+
+if (require.main === module) {
+  start().catch(error => {
+    console.error('[LEGACY:bot] STARTUP FAILED');
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { createClient, start, isLegacyCommand, getBotStatus };
