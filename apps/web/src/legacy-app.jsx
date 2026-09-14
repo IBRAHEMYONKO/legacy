@@ -3,7 +3,9 @@ import { createRoot } from 'react-dom/client';
 import './legacy-app.css';
 
 const configuredApi = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-const API = configuredApi.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(?=:)/, () => `${location.protocol}//${location.hostname}`);
+// في التطوير المحلي نربط الواجهة مباشرة بالـ API على 4000.
+// لا نحذف المنفذ من localhost لأن ذلك يحوّل الطلب بالخطأ إلى 5173/80.
+const API = configuredApi || `${location.protocol}//${location.hostname}:4000`;
 
 async function api(path, options = {}) {
   const token = localStorage.getItem('legacy_token') || '';
