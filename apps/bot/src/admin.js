@@ -3,8 +3,6 @@
 const {
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle
@@ -32,8 +30,9 @@ function money(value) {
   return Number(value || 0).toLocaleString('ar-IQ');
 }
 
-async function handleAdminInteraction(interaction, { internal, adminId }) {
-  if (interaction.user.id !== adminId) return interaction.reply({ content: 'هذه اللوحة للإدارة فقط.', ephemeral: true });
+async function handleAdminInteraction(interaction, { internal, admins }) {
+  if (!admins.has(interaction.user.id)) return interaction.reply({ content: 'هذه اللوحة للإدارة فقط.', ephemeral: true });
+  const adminId = interaction.user.id;
   const section = interaction.values?.[0];
 
   if (section === 'users') {
@@ -72,7 +71,7 @@ async function handleAdminInteraction(interaction, { internal, adminId }) {
     return interaction.showModal(adminModal('legacy:admin:code', 'إنشاء كود جائزة', [
       { id: 'code', label: 'الكود', placeholder: 'LEGACY-2026' },
       { id: 'points', label: 'النقاط', placeholder: '10000 أو 0' },
-      { id: 'maxUses', label: 'أقصى عدد استخدامات', placeholder: '100 أو اتركه فارغاً' },
+      { id: 'maxUses', label: 'أقصى عدد استخدامات', placeholder: '100 أو اتركه فارغاً', required: false },
       { id: 'premiumDays', label: 'أيام Premium', placeholder: '7 أو 0' },
       { id: 'perUserLimit', label: 'حد الاستخدام لكل مستخدم', placeholder: '1' }
     ]));
@@ -106,18 +105,21 @@ async function handleAdminInteraction(interaction, { internal, adminId }) {
   return interaction.reply({ content: 'اختر قسماً صالحاً من لوحة الإدارة.', ephemeral: true });
 }
 
-async function handleAdminModal(interaction, { internal, adminId }) {
+async function handleAdminModal(interaction, { internal, admins }) {
   if (!interaction.customId.startsWith('legacy:admin:')) return false;
-  if (interaction.user.id !== adminId) {
+  if (!admins.has(interaction.user.id)) {
     await interaction.reply({ content: 'هذه العملية للإدارة فقط.', ephemeral: true });
     return true;
   }
+  const adminId = interaction.user.id;
 
   if (interaction.customId === 'legacy:admin:points') {
+    const amount = Number(value(interaction, 'amount'));
+    if (!Number.isSafeInteger(amount) || amount === 0) throw new Error('مقدار النقاط غير صحيح.');
     await internal('/internal/admin/points', { method: 'POST', body: JSON.stringify({
       actorDiscordId: adminId,
       targetDiscordId: value(interaction, 'target'),
-      amount: Number(value(interaction, 'amount')),
+      amount,
       reason: value(interaction, 'reason')
     }) });
     await interaction.reply({ content: '✅ تم تعديل نقاط المستخدم وتسجيل العملية في السجل.', ephemeral: true });
@@ -126,6 +128,7 @@ async function handleAdminModal(interaction, { internal, adminId }) {
 
   if (interaction.customId === 'legacy:admin:premium') {
     const days = Number(value(interaction, 'days'));
+    if (!Number.isSafeInteger(days) || days < 0) throw new Error('عدد أيام Premium غير صحيح.');
     await internal('/internal/admin/premium', { method: 'POST', body: JSON.stringify({
       actorDiscordId: adminId,
       targetDiscordId: value(interaction, 'target'),
@@ -137,6 +140,7 @@ async function handleAdminModal(interaction, { internal, adminId }) {
 
   if (interaction.customId === 'legacy:admin:catalog') {
     const price = Number(value(interaction, 'price'));
+    if (!Number.isSafeInteger(price) || price < 0) throw new Error('سعر العنصر غير صحيح.');
     await internal('/internal/admin/catalog', { method: 'POST', body: JSON.stringify({
       actorDiscordId: adminId,
       type: value(interaction, 'type'),
@@ -155,18 +159,23 @@ async function handleAdminModal(interaction, { internal, adminId }) {
     const premiumDays = Number(value(interaction, 'premiumDays')) || 0;
     const maxUsesRaw = value(interaction, 'maxUses');
     const perUserLimit = Number(value(interaction, 'perUserLimit')) || 1;
+    if (!Number.isSafeInteger(points) || points < 0 || !Number.isSafeInteger(premiumDays) || premiumDays < 0) throw new Error('بيانات مكافأة الكود غير صحيحة.');
+    if (!Number.isSafeInteger(perUserLimit) || perUserLimit < 1) throw new Error('حد الاستخدام غير صحيح.');
+    const maxUses = maxUsesRaw ? Number(maxUsesRaw) : null;
+    if (maxUses !== null && (!Number.isSafeInteger(maxUses) || maxUses < 1)) throw new Error('أقصى عدد استخدامات غير صحيح.');
     const rewards = [];
     if (points > 0) rewards.push({ type: 'points', amount: points });
     if (premiumDays > 0) rewards.push({ type: 'premium_days', days: premiumDays });
     if (!rewards.length) throw new Error('أدخل نقاطاً أو أيام Premium على الأقل.');
+    const code = value(interaction, 'code').toUpperCase();
     await internal('/internal/admin/code', { method: 'POST', body: JSON.stringify({
       actorDiscordId: adminId,
-      code: value(interaction, 'code'),
+      code,
       rewards,
-      maxUses: maxUsesRaw ? Number(maxUsesRaw) : null,
+      maxUses,
       perUserLimit
     }) });
-    await interaction.reply({ content: `✅ تم إنشاء الكود **${value(interaction, 'code').toUpperCase()}** بنجاح.`, ephemeral: true });
+    await interaction.reply({ content: `✅ تم إنشاء الكود **${code}** بنجاح.`, ephemeral: true });
     return true;
   }
 
