@@ -69,7 +69,16 @@ function adminRow() {
     ['users', 'المستخدمون', '👥'], ['points', 'النقاط', '🪙'], ['catalog', 'المتجر', '🛒'],
     ['premium', 'Premium', '💎'], ['codes', 'الأكواد', '🎁'], ['audit', 'السجلات', '📝'], ['stats', 'الإحصائيات', '📊']
   ];
-  return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('legacy:admin').setPlaceholder('اختر قسم الإدارة').addOptions(options.map(([value, label, emoji]) => new StringSelectMenuOptionBuilder().setValue(value).setLabel(label).setEmoji(emoji))))];
+  return [new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('legacy:admin')
+      .setPlaceholder('اختر قسم الإدارة')
+      .addOptions(options.map(([value, label, emoji]) => new StringSelectMenuOptionBuilder()
+        .setValue(value)
+        .setLabel(label)
+        .setEmoji({ name: emoji })
+      ))
+  )];
 }
 
 function homePayload(user, admin) {
@@ -138,7 +147,7 @@ async function handleModal(interaction) {
 
 function createClient() {
   const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-  client.once('ready', () => {
+  client.once('clientReady', () => {
     const status = getBotStatus(client);
     console.log(`[LEGACY:bot] ONLINE as ${status.tag} | ping=${status.ping}ms`);
   });
