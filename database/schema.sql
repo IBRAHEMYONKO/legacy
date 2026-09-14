@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS discord_accounts (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, discord_id TEXT NOT NULL UNIQUE, username TEXT NOT NULL, global_name TEXT, avatar_url TEXT, connected_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS profiles (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, display_name TEXT, bio TEXT NOT NULL DEFAULT '', banner_url TEXT, avatar_url TEXT, level INTEGER NOT NULL DEFAULT 1 CHECK(level>0), experience BIGINT NOT NULL DEFAULT 0 CHECK(experience>=0), premium_until TIMESTAMPTZ, settings JSONB NOT NULL DEFAULT '{}'::jsonb);
