@@ -32,6 +32,10 @@ const PROD_PROCESSES = [
   ['activity', ['--workspace', 'apps/activity', 'run', 'preview', '--', '--host', host, '--port', activityPort]]
 ];
 
+function getCloudflareTunnelArgs(port) {
+  return ['tunnel', '--protocol', 'http2', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'];
+}
+
 function log(name, message) {
   process.stdout.write(`[LEGACY:${name}] ${message}\n`);
 }
@@ -88,7 +92,7 @@ function spawnPublicTunnel() {
     }
   }
 
-  const tunnel = spawn(executable, ['tunnel', '--url', `http://127.0.0.1:${webPort}`, '--no-autoupdate'], {
+  const tunnel = spawn(executable, getCloudflareTunnelArgs(webPort), {
     cwd: root,
     env: { ...process.env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -216,4 +220,4 @@ if (require.main === module) {
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-module.exports = { start, stop, waitForApi };
+module.exports = { start, stop, waitForApi, getCloudflareTunnelArgs };
