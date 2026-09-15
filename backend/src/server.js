@@ -11,7 +11,7 @@ const { registerAdminBotRoutes } = require('./admin-bot-routes');
 const { joinLegacyGuild } = require('./discord-guild');
 const { formatOAuthFailure, redactSecrets } = require('./oauth-errors');
 const { getDiscordOAuthConfig } = require('./oauth-config');
-const { createOAuthState, readOAuthState, resolveOAuthReturnUrl } = require('./oauth-state');
+const { createOAuthState, readOAuthState, resolveOAuthReturnUrl, resolveOAuthBrowserReturnUrl } = require('./oauth-state');
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
@@ -94,10 +94,14 @@ app.get('/auth/discord', (req, res) => {
   const missing = oauthMissing(false);
   if (missing.length) return res.status(500).send(`إعدادات Discord OAuth ناقصة في .env: ${missing.join(', ')}`);
 
-  const returnTo = resolveOAuthReturnUrl(req.query.return_to, webUrl);
+  const returnTo = resolveOAuthBrowserReturnUrl({
+    requested: req.query.return_to,
+    origin: req.get('origin'),
+    referer: req.get('referer')
+  }, webUrl);
   const state = createOAuthState(returnTo, jwtSecret);
   setOAuthReturnCookie(res, returnTo);
-  console.log(`[LEGACY:oauth] OAuth start returnTo=${returnTo}`);
+  console.log(`[LEGACY:oauth] OAuth start returnTo=${returnTo} origin=${req.get('origin') || '-'} referer=${req.get('referer') || '-'}`);
   const p = new URLSearchParams({
     client_id: discordClientId,
     redirect_uri: discordRedirectUri,
