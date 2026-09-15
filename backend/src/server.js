@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { pool, ready } = require('./db');
+const { resolveAuthClaims } = require('./auth-session');
 const { registerExtendedRoutes } = require('./extended-routes');
 const { registerAdminBotRoutes } = require('./admin-bot-routes');
 const { joinLegacyGuild } = require('./discord-guild');
@@ -36,11 +37,26 @@ function sign(user) {
   if (!jwtSecret) throw new Error('JWT_SECRET غير مضبوط في .env');
   return jwt.sign({ userId: user.id, discordId: user.discordId, admin: adminIds.has(user.discordId) }, jwtSecret, { expiresIn: '30d' });
 }
-function auth(req, res, next) {
+
+async function auth(req, res, next) {
   const v = req.headers.authorization || '';
   if (!v.startsWith('Bearer ')) return res.status(401).json({ error: 'غير مصرح' });
-  try { req.auth = jwt.verify(v.slice(7), jwtSecret); next(); } catch { return res.status(401).json({ error: 'الجلسة منتهية، سجّل الدخول مرة أخرى' }); }
+
+  try {
+    const claims = jwt.verify(v.slice(7), jwtSecret);
+    const resolved = await resolveAuthClaims(pool, claims);
+    if (!resolved) return res.status(401).json({ error: 'جلسة LEGACY لا ترتبط بحساب Discord. سجّل الدخول مرة أخرى.' });
+    req.auth = resolved;
+    next();
+  } catch (error) {
+    if (error?.name === 'JsonWebTokenError' || error?.name === 'TokenExpiredError' || error?.name === 'NotBeforeError') {
+      return res.status(401).json({ error: 'الجلسة منتهية، سجّل الدخول مرة أخرى' });
+    }
+    console.error('[LEGACY:auth]', error);
+    return res.status(503).json({ error: 'تعذر التحقق من جلسة LEGACY حالياً.' });
+  }
 }
+
 function admin(req, res, next) { if (!req.auth?.admin) return res.status(403).json({ error: 'هذه الصفحة للإدارة فقط' }); next(); }
 function internal(req, res, next) { if (!process.env.LEGACY_INTERNAL_KEY || req.get('x-legacy-internal-key') !== process.env.LEGACY_INTERNAL_KEY) return res.status(401).json({ error: 'internal unauthorized' }); next(); }
 app.get('/health', async (_req, res) => { try { await pool.query('SELECT 1'); res.json({ ok: true, service: 'legacy-api' }); } catch { res.status(503).json({ ok: false, service: 'legacy-api' }); } });
