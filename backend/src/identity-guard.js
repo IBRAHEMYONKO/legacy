@@ -3,13 +3,17 @@
 /**
  * Discord is the canonical identity source for LEGACY.
  *
- * PGlite prepares each query independently, so every DDL statement must be
- * sent separately. The API also enforces the same rule when profile data is
- * updated.
+ * PGlite's query() uses the extended protocol and only accepts a single
+ * statement. PGlite's exec() uses the simple protocol and is the correct API
+ * for DDL that contains a PL/pgSQL function body or multiple statements.
  */
 async function ensureIdentityGuard(pool) {
   try {
-    await pool.query(`
+    if (typeof pool.exec !== 'function') {
+      throw new Error('PGlite exec() is required for identity guard DDL');
+    }
+
+    await pool.exec(`
       CREATE OR REPLACE FUNCTION legacy_sync_discord_identity()
       RETURNS trigger
       LANGUAGE plpgsql
@@ -32,12 +36,9 @@ async function ensureIdentityGuard(pool) {
         RETURN NEW;
       END;
       $$;
-    `);
 
-    // PGlite لا يقبل DROP + CREATE في نفس prepared statement.
-    await pool.query('DROP TRIGGER IF EXISTS legacy_profile_discord_identity ON profiles;');
+      DROP TRIGGER IF EXISTS legacy_profile_discord_identity ON profiles;
 
-    await pool.query(`
       CREATE TRIGGER legacy_profile_discord_identity
       BEFORE UPDATE OF display_name, avatar_url ON profiles
       FOR EACH ROW
