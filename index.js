@@ -3,6 +3,7 @@
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { waitForHttp } = require('./backend/src/service-ready');
 const root = __dirname;
 const children = new Map();
 let stopping = false;
@@ -150,6 +151,16 @@ function buildClients() {
   execFileSync(npmCommand, ['--workspace', 'apps/activity', 'run', 'build'], { cwd: root, env: { ...process.env }, stdio: 'inherit', shell: isWindows });
 }
 
+async function waitForApi() {
+  log('core', `waiting for API health check on http://127.0.0.1:${apiPort}/health...`);
+  await waitForHttp(`http://127.0.0.1:${apiPort}/health`, {
+    attempts: 60,
+    intervalMs: 250,
+    timeoutMs: 1500
+  });
+  log('core', 'API is ready; starting web and Activity');
+}
+
 async function start(options = {}) {
   if (children.size) return Object.fromEntries(children);
   stopping = false;
@@ -158,7 +169,18 @@ async function start(options = {}) {
   if (mode === 'production') buildClients();
   const processes = mode === 'production' ? PROD_PROCESSES : DEV_PROCESSES;
   printEndpoints(mode);
-  for (const [name, args] of processes) spawnProcess(name, args);
+
+  const apiEntry = processes.find(([name]) => name === 'api');
+  const botEntry = processes.find(([name]) => name === 'bot');
+  const clientProcesses = processes.filter(([name]) => name === 'web' || name === 'activity');
+
+  if (apiEntry) spawnProcess(...apiEntry);
+  if (botEntry) spawnProcess(...botEntry);
+
+  await waitForApi();
+
+  for (const [name, args] of clientProcesses) spawnProcess(name, args);
+
   if (mode !== 'production' && enablePublicTunnel) {
     setTimeout(() => {
       if (!stopping && !children.has('public')) spawnPublicTunnel();
@@ -194,4 +216,4 @@ if (require.main === module) {
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, waitForApi };
