@@ -16,6 +16,9 @@ export default defineConfig(({ command }) => ({
 
   server: {
     host: '0.0.0.0',
+    // Cloudflare Quick Tunnel يولّد نطاقاً عشوائياً من trycloudflare.com.
+    // نسمح به تلقائياً حتى لا يرفض Vite الرابط العام كل مرة يتغيّر فيها.
+    allowedHosts: ['.trycloudflare.com'],
     proxy: {
       '/auth': {
         target: apiTarget,
