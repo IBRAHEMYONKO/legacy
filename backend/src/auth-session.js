@@ -1,14 +1,19 @@
 'use strict';
 
+const { classifyAuthResult } = require('./auth-diagnostics');
+
 /**
  * Resolve the canonical LEGACY user id for a verified Discord-backed session.
  *
- * Discord is the canonical identity. A JWT may contain an old local UUID after
+ * Discord is the canonical identity source. A JWT may contain an old local UUID after
  * the local database is recreated, so the Discord id is allowed to recover the
  * current LEGACY user row.
  */
 async function resolveSessionUserId(pool, claims) {
-  if (!claims?.userId && !claims?.discordId) return null;
+  if (!claims?.userId && !claims?.discordId) {
+    console.warn('[LEGACY:auth] session=missing-claims');
+    return null;
+  }
 
   if (claims.userId) {
     const direct = await pool.query(
@@ -26,6 +31,7 @@ async function resolveSessionUserId(pool, claims) {
     if (byDiscord.rowCount) return byDiscord.rows[0].user_id;
   }
 
+  console.warn(`[LEGACY:auth] session=${classifyAuthResult({ hasBearer: true, verified: true, linked: false })} discordLinked=false discordIdPresent=${claims.discordId ? 'yes' : 'no'}`);
   return null;
 }
 
