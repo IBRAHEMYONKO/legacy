@@ -1,16 +1,21 @@
 'use strict';
 
 const { spawn, execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const root = __dirname;
 const children = new Map();
 let stopping = false;
+let publicUrl = '';
 
 const isWindows = process.platform === 'win32';
 const npmCommand = isWindows ? 'npm.cmd' : 'npm';
+const cloudflaredCommand = isWindows ? 'cloudflared.exe' : 'cloudflared';
 const webPort = process.env.WEB_PORT || '5173';
 const activityPort = process.env.ACTIVITY_PORT || '5174';
 const apiPort = process.env.API_PORT || '4000';
 const host = process.env.LEGACY_HOST || '0.0.0.0';
+const enablePublicTunnel = String(process.env.LEGACY_PUBLIC || 'true').toLowerCase() !== 'false';
 
 const DEV_PROCESSES = [
   ['api', ['--workspace', 'backend', 'run', 'dev']],
@@ -55,6 +60,77 @@ function spawnProcess(name, args) {
   return child;
 }
 
+function spawnPublicTunnel() {
+  if (!enablePublicTunnel || children.has('public')) return null;
+
+  const candidates = isWindows
+    ? [
+        path.join(root, 'cloudflared.exe'),
+        path.join(root, 'tools', 'cloudflared.exe'),
+        cloudflaredCommand
+      ]
+    : [
+        path.join(root, 'cloudflared'),
+        path.join(root, 'tools', 'cloudflared'),
+        cloudflaredCommand
+      ];
+
+  let executable = candidates[0];
+  for (const candidate of candidates) {
+    if (path.isAbsolute(candidate) && fs.existsSync(candidate)) {
+      executable = candidate;
+      break;
+    }
+    if (!path.isAbsolute(candidate)) {
+      executable = candidate;
+      break;
+    }
+  }
+
+  const tunnel = spawn(executable, ['tunnel', '--url', `http://127.0.0.1:${webPort}`, '--no-autoupdate'], {
+    cwd: root,
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: false,
+    shell: isWindows
+  });
+
+  children.set('public', tunnel);
+  log('public', `starting Cloudflare public tunnel for http://127.0.0.1:${webPort} (pid ${tunnel.pid})`);
+
+  const consume = (chunk) => {
+    const text = String(chunk || '');
+    process.stdout.write(text.split(/\r?\n/).filter(Boolean).map(line => `[LEGACY:public] ${line}\n`).join(''));
+
+    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+    if (match && match[0] !== publicUrl) {
+      publicUrl = match[0];
+      log('public', `PUBLIC URL: ${publicUrl}`);
+    }
+  };
+
+  tunnel.stdout.on('data', consume);
+  tunnel.stderr.on('data', consume);
+
+  tunnel.once('error', (error) => {
+    children.delete('public');
+    publicUrl = '';
+    if (error?.code === 'ENOENT') {
+      log('public', 'cloudflared غير مثبت. نزّله ثم أعد npm run dev؛ الموقع المحلي سيستمر بالعمل.');
+      log('public', 'التثبيت الرسمي: https://developers.cloudflare.com/tunnel/downloads/');
+    } else {
+      log('public', `failed: ${error.message}`);
+    }
+  });
+
+  tunnel.once('exit', (code, signal) => {
+    children.delete('public');
+    if (!stopping && code !== 0) log('public', `tunnel stopped (code=${code ?? 'null'}, signal=${signal ?? 'none'})`);
+  });
+
+  return tunnel;
+}
+
 function printEndpoints(mode) {
   const lanHost = process.env.LEGACY_LAN_HOST || '192.168.100.15';
   log('core', '');
@@ -63,6 +139,7 @@ function printEndpoints(mode) {
   log('core', `Website LAN : http://${lanHost}:${webPort}`);
   log('core', `Activity    : http://localhost:${activityPort}`);
   log('core', `API         : http://localhost:${apiPort}`);
+  log('core', `Public Web  : ${enablePublicTunnel ? 'waiting for Cloudflare...' : 'disabled (LEGACY_PUBLIC=false)'}`);
   log('core', 'Discord Bot : starting from the same command');
   log('core', 'Stop all   : Ctrl+C');
 }
@@ -76,11 +153,17 @@ function buildClients() {
 async function start(options = {}) {
   if (children.size) return Object.fromEntries(children);
   stopping = false;
+  publicUrl = '';
   const mode = options.mode || process.env.LEGACY_MODE || 'development';
   if (mode === 'production') buildClients();
   const processes = mode === 'production' ? PROD_PROCESSES : DEV_PROCESSES;
   printEndpoints(mode);
   for (const [name, args] of processes) spawnProcess(name, args);
+  if (mode !== 'production' && enablePublicTunnel) {
+    setTimeout(() => {
+      if (!stopping && !children.has('public')) spawnPublicTunnel();
+    }, 1500).unref();
+  }
   return Object.fromEntries(children);
 }
 
@@ -100,6 +183,7 @@ async function stop() {
     }
     log(name, 'stopping...');
   })));
+  publicUrl = '';
   stopping = false;
 }
 
