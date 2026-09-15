@@ -24,6 +24,8 @@ const discordClientSecret = oauthConfig.clientSecret;
 const discordRedirectUri = oauthConfig.redirectUri;
 const discordActivityRedirectUri = oauthConfig.activityRedirectUri;
 const jwtSecret = String(process.env.JWT_SECRET || '').trim();
+const OAUTH_RETURN_COOKIE = 'legacy_oauth_return';
+const OAUTH_RETURN_MAX_AGE = 10 * 60;
 
 function oauthMissing(activity = false) {
   const missing = [];
@@ -41,6 +43,29 @@ app.use(express.json({ limit: '2mb' }));
 function sign(user) {
   if (!jwtSecret) throw new Error('JWT_SECRET غير مضبوط في .env');
   return jwt.sign({ userId: user.id, discordId: user.discordId, admin: adminIds.has(user.discordId) }, jwtSecret, { expiresIn: '30d' });
+}
+
+function parseCookies(req) {
+  const raw = String(req.headers.cookie || '');
+  const cookies = {};
+  for (const part of raw.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    cookies[key] = value;
+  }
+  return cookies;
+}
+
+function setOAuthReturnCookie(res, returnTo) {
+  const safe = resolveOAuthReturnUrl(returnTo, webUrl);
+  res.setHeader('Set-Cookie', `${OAUTH_RETURN_COOKIE}=${encodeURIComponent(safe)}; Max-Age=${OAUTH_RETURN_MAX_AGE}; Path=/auth/discord; HttpOnly; SameSite=Lax`);
+}
+
+function clearOAuthReturnCookie(res) {
+  res.setHeader('Set-Cookie', `${OAUTH_RETURN_COOKIE}=; Max-Age=0; Path=/auth/discord; HttpOnly; SameSite=Lax`);
 }
 
 async function auth(req, res, next) {
@@ -71,6 +96,8 @@ app.get('/auth/discord', (req, res) => {
 
   const returnTo = resolveOAuthReturnUrl(req.query.return_to, webUrl);
   const state = createOAuthState(returnTo, jwtSecret);
+  setOAuthReturnCookie(res, returnTo);
+  console.log(`[LEGACY:oauth] OAuth start returnTo=${returnTo}`);
   const p = new URLSearchParams({
     client_id: discordClientId,
     redirect_uri: discordRedirectUri,
@@ -125,21 +152,29 @@ async function upsertDiscordUser(me) {
 }
 
 function readOAuthReturn(req) {
+  const cookies = parseCookies(req);
+  const cookieReturn = (() => {
+    try { return decodeURIComponent(cookies[OAUTH_RETURN_COOKIE] || ''); } catch { return ''; }
+  })();
+
   try {
-    return readOAuthState(req.query.state, jwtSecret).returnTo;
+    const fromState = readOAuthState(req.query.state, jwtSecret).returnTo;
+    return resolveOAuthReturnUrl(fromState, webUrl);
   } catch {
-    return resolveOAuthReturnUrl('', webUrl);
+    return resolveOAuthReturnUrl(cookieReturn, webUrl);
   }
 }
 
 function oauthFailureRedirect(res, error, returnTo) {
   const message = encodeURIComponent(formatOAuthFailure(error));
   const safeReturn = resolveOAuthReturnUrl(returnTo, webUrl);
+  clearOAuthReturnCookie(res);
   return res.redirect(`${safeReturn}/?auth_error=${message}`);
 }
 
 app.get('/auth/discord/callback', async (req, res) => {
   const returnTo = readOAuthReturn(req);
+  console.log(`[LEGACY:oauth] OAuth callback returnTo=${returnTo} state=${req.query.state ? 'present' : 'missing'}`);
   if (req.query.error) return oauthFailureRedirect(res, new Error(`Discord OAuth رفض الطلب (${String(req.query.error).slice(0, 120)})`), returnTo);
   if (!req.query.code) return res.status(400).send('Missing OAuth code');
   try {
@@ -147,7 +182,9 @@ app.get('/auth/discord/callback', async (req, res) => {
     const user = await upsertDiscordUser(oauth.me);
     const guild = await joinLegacyGuild(oauth.me.id, oauth.accessToken);
     console.log(`[LEGACY:oauth] Discord ${oauth.me.id} authenticated and verified in guild ${guild.id}`);
-    return res.redirect(`${returnTo}/?token=${encodeURIComponent(sign(user))}`);
+    const token = encodeURIComponent(sign(user));
+    clearOAuthReturnCookie(res);
+    return res.redirect(`${returnTo}/?token=${token}`);
   } catch (e) {
     console.error('[LEGACY:oauth]', redactSecrets(e?.message || e));
     return oauthFailureRedirect(res, e, returnTo);
