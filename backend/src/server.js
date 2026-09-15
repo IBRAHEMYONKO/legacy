@@ -9,15 +9,19 @@ const { resolveAuthClaims } = require('./auth-session');
 const { registerExtendedRoutes } = require('./extended-routes');
 const { registerAdminBotRoutes } = require('./admin-bot-routes');
 const { joinLegacyGuild } = require('./discord-guild');
+const { formatOAuthFailure, redactSecrets } = require('./oauth-errors');
+const { getDiscordOAuthConfig } = require('./oauth-config');
+
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
 const webUrl = process.env.WEB_URL || 'http://localhost:5173';
 const activityUrl = process.env.ACTIVITY_URL || 'http://localhost:5174';
 const adminIds = new Set((process.env.LEGACY_ADMIN_IDS || '').split(',').map(x => x.trim()).filter(Boolean));
-const discordClientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
-const discordClientSecret = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
-const discordRedirectUri = String(process.env.DISCORD_REDIRECT_URI || '').trim();
-const discordActivityRedirectUri = String(process.env.DISCORD_ACTIVITY_REDIRECT_URI || discordRedirectUri).trim();
+const oauthConfig = getDiscordOAuthConfig(process.env);
+const discordClientId = oauthConfig.clientId;
+const discordClientSecret = oauthConfig.clientSecret;
+const discordRedirectUri = oauthConfig.redirectUri;
+const discordActivityRedirectUri = oauthConfig.activityRedirectUri;
 const jwtSecret = String(process.env.JWT_SECRET || '').trim();
 
 function oauthMissing(activity = false) {
@@ -41,7 +45,6 @@ function sign(user) {
 async function auth(req, res, next) {
   const v = req.headers.authorization || '';
   if (!v.startsWith('Bearer ')) return res.status(401).json({ error: 'غير مصرح' });
-
   try {
     const claims = jwt.verify(v.slice(7), jwtSecret);
     const resolved = await resolveAuthClaims(pool, claims);
@@ -68,7 +71,7 @@ app.get('/auth/discord', (_req, res) => {
     client_id: discordClientId,
     redirect_uri: discordRedirectUri,
     response_type: 'code',
-    scope: 'identify guilds.join',
+    scope: oauthConfig.scopes.join(' '),
     prompt: 'consent'
   });
   return res.redirect(`https://discord.com/oauth2/authorize?${p.toString()}`);
@@ -81,10 +84,14 @@ async function exchangeDiscordCode(code, redirectUri) {
   if (!redirectUri) throw new Error('Missing Discord OAuth redirect URI');
   const body = new URLSearchParams({ client_id: discordClientId, client_secret: discordClientSecret, grant_type: 'authorization_code', code, redirect_uri: redirectUri });
   const tr = await fetch('https://discord.com/api/v10/oauth2/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
-  if (!tr.ok) { const details = await tr.text().catch(() => ''); throw new Error(`OAuth token exchange failed (${tr.status})${details ? `: ${details}` : ''}`); }
+  if (!tr.ok) {
+    const details = await tr.text().catch(() => '');
+    throw new Error(`OAuth token exchange failed (${tr.status})${details ? `: ${redactSecrets(details)}` : ''}`);
+  }
   const token = await tr.json();
+  if (!token.access_token) throw new Error('Discord لم يرجع رمز وصول صالحاً');
   const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
-  if (!mr.ok) throw new Error('Discord identity lookup failed');
+  if (!mr.ok) throw new Error(`Discord identity lookup failed (${mr.status})`);
   return { me: await mr.json(), accessToken: token.access_token };
 }
 
@@ -109,20 +116,26 @@ async function upsertDiscordUser(me) {
     await c.query('UPDATE profiles SET display_name=$1,avatar_url=$2 WHERE user_id=$3', [discordDisplayName, avatar, id]);
     await c.query('COMMIT');
     return { id, discordId: me.id };
-  } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+  } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+}
+
+function oauthFailureRedirect(res, error) {
+  const message = encodeURIComponent(formatOAuthFailure(error));
+  return res.redirect(`${webUrl}/?auth_error=${message}`);
 }
 
 app.get('/auth/discord/callback', async (req, res) => {
+  if (req.query.error) return oauthFailureRedirect(res, new Error(`Discord OAuth رفض الطلب (${String(req.query.error).slice(0, 120)})`));
   if (!req.query.code) return res.status(400).send('Missing OAuth code');
   try {
     const oauth = await exchangeDiscordCode(req.query.code, discordRedirectUri);
     const user = await upsertDiscordUser(oauth.me);
-    await joinLegacyGuild(oauth.me.id, oauth.accessToken);
+    const guild = await joinLegacyGuild(oauth.me.id, oauth.accessToken);
+    console.log(`[LEGACY:oauth] Discord ${oauth.me.id} authenticated and verified in guild ${guild.id}`);
     return res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`);
   } catch (e) {
-    console.error('[LEGACY:oauth]', e);
-    const message = encodeURIComponent('فشل ربط Discord. تأكد من الموافقة على الصلاحيات، وأن بوت LEGACY موجود في السيرفر ولديه صلاحية إضافة الأعضاء، ثم حاول مرة ثانية.');
-    return res.redirect(`${webUrl}/?auth_error=${message}`);
+    console.error('[LEGACY:oauth]', redactSecrets(e?.message || e));
+    return oauthFailureRedirect(res, e);
   }
 });
 
@@ -136,7 +149,10 @@ app.post('/activity/auth', async (req, res) => {
     await joinLegacyGuild(oauth.me.id, oauth.accessToken);
     const p = await pool.query(`SELECT d.discord_id,d.username,d.global_name,d.avatar_url,d.global_name AS display_name,p.level,p.experience,p.premium_until,COALESCE((SELECT SUM(amount) FROM point_transactions WHERE user_id=u.id),0)::bigint AS points FROM users u JOIN discord_accounts d ON d.user_id=u.id JOIN profiles p ON p.user_id=u.id WHERE u.id=$1`, [user.id]);
     res.json({ token: sign(user), discordUser: oauth.me, me: p.rows[0] || null });
-  } catch (e) { console.error('[LEGACY:activity-oauth]', e); res.status(403).json({ error: 'لا يمكن دخول LEGACY قبل ربط Discord والانضمام إلى السيرفر.' }); }
+  } catch (e) {
+    console.error('[LEGACY:activity-oauth]', redactSecrets(e?.message || e));
+    res.status(403).json({ error: formatOAuthFailure(e).replace('تعذر إكمال تسجيل Discord: ', 'لا يمكن إكمال تسجيل Activity: ') });
+  }
 });
 
 app.get('/api/me', auth, async (req, res) => {
@@ -183,23 +199,21 @@ app.get('/internal/user/:discordId/cosmetics', internal, async (req, res) => {
 app.post('/internal/user/:discordId/shop/:itemId/buy', internal, async (req, res) => {
   const user = await pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [req.params.discordId]);
   if (!user.rowCount) return res.status(404).json({ error: 'المستخدم غير مرتبط بـ LEGACY' });
+  const c = await pool.connect();
   try {
-    const c = await pool.connect();
-    try {
-      await c.query('BEGIN');
-      await c.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.rows[0].user_id]);
-      const item = await c.query('SELECT * FROM catalog_items WHERE id=$1 AND active=true FOR UPDATE', [req.params.itemId]);
-      if (!item.rowCount) throw Object.assign(new Error('العنصر غير موجود'), { status: 404 });
-      const balance = await c.query('SELECT COALESCE(SUM(amount),0)::bigint AS points FROM point_transactions WHERE user_id=$1', [user.rows[0].user_id]);
-      const price = BigInt(item.rows[0].price);
-      if (BigInt(balance.rows[0].points) < price) throw Object.assign(new Error('رصيدك غير كافٍ'), { status: 400 });
-      await c.query('INSERT INTO point_transactions(user_id,amount,reason) VALUES($1,$2,$3)', [user.rows[0].user_id, -Number(price), `شراء: ${item.rows[0].name}`]);
-      await c.query('INSERT INTO inventory_items(user_id,item_id,quantity) VALUES($1,$2,1) ON CONFLICT(user_id,item_id) DO UPDATE SET quantity=inventory_items.quantity+1,acquired_at=now()', [user.rows[0].user_id, item.rows[0].id]);
-      await c.query('INSERT INTO purchases(user_id,item_id,price) VALUES($1,$2,$3)', [user.rows[0].user_id, item.rows[0].id, Number(price)]);
-      await c.query('COMMIT');
-      res.json({ ok: true, item: item.rows[0] });
-    } catch (error) { await c.query('ROLLBACK').catch(() => {}); throw error; } finally { c.release(); }
-  } catch (error) { res.status(error.status || 500).json({ error: error.message || 'فشل الشراء' }); }
+    await c.query('BEGIN');
+    await c.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.rows[0].user_id]);
+    const item = await c.query('SELECT * FROM catalog_items WHERE id=$1 AND active=true FOR UPDATE', [req.params.itemId]);
+    if (!item.rowCount) throw Object.assign(new Error('العنصر غير موجود'), { status: 404 });
+    const balance = await c.query('SELECT COALESCE(SUM(amount),0)::bigint AS points FROM point_transactions WHERE user_id=$1', [user.rows[0].user_id]);
+    const price = BigInt(item.rows[0].price);
+    if (BigInt(balance.rows[0].points) < price) throw Object.assign(new Error('رصيدك غير كافٍ'), { status: 400 });
+    await c.query('INSERT INTO point_transactions(user_id,amount,reason) VALUES($1,$2,$3)', [user.rows[0].user_id, -Number(price), `شراء: ${item.rows[0].name}`]);
+    await c.query('INSERT INTO inventory_items(user_id,item_id,quantity) VALUES($1,$2,1) ON CONFLICT(user_id,item_id) DO UPDATE SET quantity=inventory_items.quantity+1,acquired_at=now()', [user.rows[0].user_id, item.rows[0].id]);
+    await c.query('INSERT INTO purchases(user_id,item_id,price) VALUES($1,$2,$3)', [user.rows[0].user_id, item.rows[0].id, Number(price)]);
+    await c.query('COMMIT');
+    res.json({ ok: true, item: item.rows[0] });
+  } catch (error) { await c.query('ROLLBACK').catch(() => {}); res.status(error.status || 500).json({ error: error.message || 'فشل الشراء' }); } finally { c.release(); }
 });
 app.post('/internal/admin/points', internal, async (req, res) => { const actor = String(req.body.actorDiscordId || ''), target = String(req.body.targetDiscordId || ''), amount = Number(req.body.amount), reason = String(req.body.reason || 'تعديل إداري').slice(0,200); if (!adminIds.has(actor)) return res.status(403).json({ error: 'الإدارة فقط' }); if (!target || !Number.isSafeInteger(amount) || amount === 0) return res.status(400).json({ error: 'بيانات غير صحيحة' }); const [t,a] = await Promise.all([pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [target]), pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [actor])]); if (!t.rowCount || !a.rowCount) return res.status(404).json({ error: 'الحساب غير مرتبط' }); await pool.query('INSERT INTO point_transactions(user_id,amount,reason,actor_user_id) VALUES($1,$2,$3,$4)', [t.rows[0].user_id, amount, reason, a.rows[0].user_id]); await pool.query('INSERT INTO audit_logs(actor_user_id,action,target_user_id,payload) VALUES($1,$2,$3,$4)', [a.rows[0].user_id, 'points.adjust', t.rows[0].user_id, JSON.stringify({ amount, reason, source: 'discord' })]); res.json({ ok: true }); });
 app.post('/internal/admin/catalog', internal, async (req, res) => { const actor = String(req.body.actorDiscordId || ''); if (!adminIds.has(actor)) return res.status(403).json({ error: 'الإدارة فقط' }); const { type, slug, name, description = '', price = 0, metadata = {} } = req.body; if (!type || !slug || !name || !Number.isSafeInteger(Number(price)) || Number(price) < 0) return res.status(400).json({ error: 'بيانات العنصر غير صحيحة' }); const a = await pool.query('SELECT user_id FROM discord_accounts WHERE discord_id=$1', [actor]); if (!a.rowCount) return res.status(404).json({ error: 'حساب الإدارة غير مرتبط' }); const r = await pool.query('INSERT INTO catalog_items(type,slug,name,description,price,metadata) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [type, slug, name, description, Number(price), JSON.stringify(metadata)]); await pool.query('INSERT INTO audit_logs(actor_user_id,action,payload) VALUES($1,$2,$3)', [a.rows[0].user_id, 'catalog.create', JSON.stringify({ itemId: r.rows[0].id, source: 'discord' })]); res.status(201).json(r.rows[0]); });
