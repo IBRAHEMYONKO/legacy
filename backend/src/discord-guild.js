@@ -33,13 +33,11 @@ async function resolveGuildFromInvite(fetchImpl = defaultFetch) {
 }
 
 async function getBotIdentity(fetchImpl = defaultFetch) {
-  if (!BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط');
-  const response = await fetchImpl('https://discord.com/api/v10/users/@me', {
-    headers: { Authorization: `Bot ${BOT_TOKEN}` }
-  });
+  if (fetchImpl === defaultFetch && !BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط');
+  const response = await fetchImpl('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${BOT_TOKEN}` } });
   if (!response.ok) {
     const details = await responseDetails(response);
-    throw new Error(`تعذر التحقق من هوية بوت LEGACY (${response.status})${details.message ? ` — ${details.message}` : ''}`);
+    throw new Error(`تعذر التحقق من هوية بوت LEGACY (${response.status})${details.message ? ` — ${details.message}` : ''}${details.code ? ` [Discord ${details.code}]` : ''}`);
   }
   return response.json();
 }
@@ -47,16 +45,12 @@ async function getBotIdentity(fetchImpl = defaultFetch) {
 async function assertSameDiscordApplication(fetchImpl = defaultFetch) {
   if (!CLIENT_ID) return;
   const bot = await getBotIdentity(fetchImpl);
-  if (bot.id !== CLIENT_ID) {
-    throw new Error(`تطبيق Discord غير متطابق: DISCORD_CLIENT_ID لا يطابق بوت LEGACY. استخدم Client ID لنفس التطبيق الموجود منه DISCORD_BOT_TOKEN.`);
-  }
+  if (bot.id !== CLIENT_ID) throw new Error('تطبيق Discord غير متطابق: DISCORD_CLIENT_ID لا يطابق بوت LEGACY. استخدم Client ID لنفس التطبيق الموجود منه DISCORD_BOT_TOKEN.');
 }
 
 async function getBotGuildMember(guildId, userId, fetchImpl = defaultFetch) {
-  if (!BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط؛ لا يمكن التحقق من عضوية السيرفر');
-  const response = await fetchImpl(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
-    headers: { Authorization: `Bot ${BOT_TOKEN}` }
-  });
+  if (fetchImpl === defaultFetch && !BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط؛ لا يمكن التحقق من عضوية السيرفر');
+  const response = await fetchImpl(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, { headers: { Authorization: `Bot ${BOT_TOKEN}` } });
   if (response.status === 200) return true;
   if (response.status === 404) return false;
   const details = await responseDetails(response);
@@ -65,12 +59,10 @@ async function getBotGuildMember(guildId, userId, fetchImpl = defaultFetch) {
 }
 
 async function joinLegacyGuild(userId, oauthAccessToken, fetchImpl = defaultFetch) {
-  if (!BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط؛ لا يمكن إضافة العضو إلى سيرفر LEGACY');
+  if (fetchImpl === defaultFetch && !BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN غير مضبوط؛ لا يمكن إضافة العضو إلى سيرفر LEGACY');
   if (!oauthAccessToken) throw new Error('Discord OAuth access token مفقود؛ أعد ربط الحساب');
-
   await assertSameDiscordApplication(fetchImpl);
   const guild = await resolveGuildFromInvite(fetchImpl);
-
   if (await getBotGuildMember(guild.id, userId, fetchImpl)) return guild;
 
   const response = await fetchImpl(`https://discord.com/api/v10/guilds/${guild.id}/members/${userId}`, {
@@ -87,15 +79,12 @@ async function joinLegacyGuild(userId, oauthAccessToken, fetchImpl = defaultFetc
     throw new Error(`تعذر إدخالك إلى سيرفر LEGACY (${response.status})${suffix}`);
   }
 
-  if (!(await getBotGuildMember(guild.id, userId, fetchImpl))) {
-    throw new Error('تم قبول طلب إضافة العضو من Discord لكن العضوية لم تظهر بعد. أعد المحاولة بعد لحظات.');
-  }
-
+  if (!(await getBotGuildMember(guild.id, userId, fetchImpl))) throw new Error('تم قبول طلب إضافة العضو من Discord لكن العضوية لم تظهر بعد. أعد المحاولة بعد لحظات.');
   return guild;
 }
 
 async function isLegacyGuildMember(userId, fetchImpl = defaultFetch) {
-  if (!BOT_TOKEN) return false;
+  if (fetchImpl === defaultFetch && !BOT_TOKEN) return false;
   const guild = await resolveGuildFromInvite(fetchImpl);
   return getBotGuildMember(guild.id, userId, fetchImpl);
 }
