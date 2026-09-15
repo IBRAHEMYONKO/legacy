@@ -8,7 +8,7 @@ test('returns true when the user is already a member', async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(url);
-    if (url.includes('/members/')) return new Response('', { status: 200 });
+    if (url.includes('/members/')) return new Response(null, { status: 200 });
     throw new Error('unexpected URL');
   };
   assert.equal(await getBotGuildMember('guild-1', 'user-1', fetchImpl), true);
@@ -21,13 +21,13 @@ test('adds an absent user and verifies membership again', async () => {
     if (url.includes('/invites/')) return new Response(JSON.stringify({ guild: { id: 'guild-1', name: 'LEGACY' } }), { status: 200 });
     if (url.includes('/members/')) {
       memberCalls += 1;
-      if (memberCalls === 1) return new Response('', { status: 404 });
+      if (memberCalls === 1) return new Response(null, { status: 404 });
       if (memberCalls === 2) {
         assert.equal(options.method, 'PUT');
         assert.deepEqual(JSON.parse(options.body), { access_token: 'oauth-token' });
-        return new Response('', { status: 204 });
+        return new Response(null, { status: 204 });
       }
-      return new Response('', { status: 200 });
+      return new Response(null, { status: 200 });
     }
     throw new Error('unexpected URL');
   };
