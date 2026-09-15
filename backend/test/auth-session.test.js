@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveSessionUserId } = require('../src/auth-session');
+const { resolveSessionUserId, resolveAuthClaims } = require('../src/auth-session');
 
 function poolFor(rowsByQuery) {
   return {
@@ -49,4 +49,12 @@ test('falls back to Discord id when the JWT user id is paired with a different D
     { userId: 'current-user', discordId: 'different-discord' }
   );
   assert.equal(result, 'discord-user-current');
+});
+
+test('rewrites authenticated claims to the canonical current user id', async () => {
+  const result = await resolveAuthClaims(
+    poolFor({ direct: null, discord: 'current-user' }),
+    { userId: 'stale-user', discordId: 'discord-user' }
+  );
+  assert.deepEqual(result, { userId: 'current-user', discordId: 'discord-user' });
 });
