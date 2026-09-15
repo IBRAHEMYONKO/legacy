@@ -20,10 +20,15 @@ jobs:
         run: npm install
       - name: Backend tests
         run: npm test
+      - name: Web tests
+        run: npm --workspace apps/web test
+      - name: Bot tests
+        run: npm --workspace apps/bot test
       - name: Syntax check
         run: |
           node --check index.js
           node --check backend/src/server.js
+          node --check backend/src/discord-guild.js
           node --check apps/bot/src/index.js
       - name: Web build
         run: npm --workspace apps/web run build
