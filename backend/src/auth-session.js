@@ -3,9 +3,9 @@
 /**
  * Resolve the canonical LEGACY user id for a verified Discord-backed session.
  *
- * A JWT may contain a userId created before the local database was recreated or
- * migrated. Discord remains the canonical identity, so the discordId can
- * recover the current user row without forcing a new login.
+ * Discord is the canonical identity. A JWT may contain an old local UUID after
+ * the local database is recreated, so the Discord id is allowed to recover the
+ * current LEGACY user row.
  */
 async function resolveSessionUserId(pool, claims) {
   if (!claims?.userId && !claims?.discordId) return null;
@@ -29,4 +29,14 @@ async function resolveSessionUserId(pool, claims) {
   return null;
 }
 
-module.exports = { resolveSessionUserId };
+/**
+ * Return claims with the canonical current LEGACY user id.
+ * Returns null when the JWT is valid but no Discord-linked LEGACY account exists.
+ */
+async function resolveAuthClaims(pool, claims) {
+  const userId = await resolveSessionUserId(pool, claims);
+  if (!userId) return null;
+  return { ...claims, userId };
+}
+
+module.exports = { resolveSessionUserId, resolveAuthClaims };
