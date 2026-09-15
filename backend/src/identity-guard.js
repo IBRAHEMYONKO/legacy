@@ -3,10 +3,9 @@
 /**
  * Discord is the canonical identity source for LEGACY.
  *
- * The trigger is a database-level safety net. Local PGlite installations can
- * occasionally fail to create procedural triggers while the database is
- * being initialized, so trigger setup must never prevent the API from booting.
- * The API also enforces the same rule when profile data is updated.
+ * PGlite prepares each query independently, so every DDL statement must be
+ * sent separately. The API also enforces the same rule when profile data is
+ * updated.
  */
 async function ensureIdentityGuard(pool) {
   try {
@@ -35,8 +34,10 @@ async function ensureIdentityGuard(pool) {
       $$;
     `);
 
+    // PGlite لا يقبل DROP + CREATE في نفس prepared statement.
+    await pool.query('DROP TRIGGER IF EXISTS legacy_profile_discord_identity ON profiles;');
+
     await pool.query(`
-      DROP TRIGGER IF EXISTS legacy_profile_discord_identity ON profiles;
       CREATE TRIGGER legacy_profile_discord_identity
       BEFORE UPDATE OF display_name, avatar_url ON profiles
       FOR EACH ROW
