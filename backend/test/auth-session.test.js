@@ -8,7 +8,8 @@ function poolFor(rowsByQuery) {
   return {
     async query(sql, params) {
       if (sql.includes('WHERE d.user_id=$1')) {
-        return { rowCount: rowsByQuery.direct ? 1 : 0, rows: rowsByQuery.direct ? [{ user_id: rowsByQuery.direct }] : [] };
+        const exact = rowsByQuery.direct && params[0] === rowsByQuery.direct && params[1] === rowsByQuery.discord;
+        return { rowCount: exact ? 1 : 0, rows: exact ? [{ user_id: rowsByQuery.direct }] : [] };
       }
       if (sql.includes('WHERE discord_id=$1')) {
         return { rowCount: rowsByQuery.discord ? 1 : 0, rows: rowsByQuery.discord ? [{ user_id: rowsByQuery.discord }] : [] };
@@ -40,4 +41,12 @@ test('rejects a session when neither user id nor Discord id resolves', async () 
     { userId: 'missing-user', discordId: 'missing-discord' }
   );
   assert.equal(result, null);
+});
+
+test('falls back to Discord id when the JWT user id is paired with a different Discord account', async () => {
+  const result = await resolveSessionUserId(
+    poolFor({ direct: null, discord: 'discord-user-current' }),
+    { userId: 'current-user', discordId: 'different-discord' }
+  );
+  assert.equal(result, 'discord-user-current');
 });
