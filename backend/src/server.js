@@ -11,6 +11,7 @@ const { registerAdminBotRoutes } = require('./admin-bot-routes');
 const { joinLegacyGuild } = require('./discord-guild');
 const { formatOAuthFailure, redactSecrets } = require('./oauth-errors');
 const { getDiscordOAuthConfig } = require('./oauth-config');
+const { createOAuthState, readOAuthState, resolveOAuthReturnUrl } = require('./oauth-state');
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
@@ -64,14 +65,18 @@ function admin(req, res, next) { if (!req.auth?.admin) return res.status(403).js
 function internal(req, res, next) { if (!process.env.LEGACY_INTERNAL_KEY || req.get('x-legacy-internal-key') !== process.env.LEGACY_INTERNAL_KEY) return res.status(401).json({ error: 'internal unauthorized' }); next(); }
 app.get('/health', async (_req, res) => { try { await pool.query('SELECT 1'); res.json({ ok: true, service: 'legacy-api' }); } catch { res.status(503).json({ ok: false, service: 'legacy-api' }); } });
 
-app.get('/auth/discord', (_req, res) => {
+app.get('/auth/discord', (req, res) => {
   const missing = oauthMissing(false);
   if (missing.length) return res.status(500).send(`إعدادات Discord OAuth ناقصة في .env: ${missing.join(', ')}`);
+
+  const returnTo = resolveOAuthReturnUrl(req.query.return_to, webUrl);
+  const state = createOAuthState(returnTo, jwtSecret);
   const p = new URLSearchParams({
     client_id: discordClientId,
     redirect_uri: discordRedirectUri,
     response_type: 'code',
     scope: oauthConfig.scopes.join(' '),
+    state,
     prompt: 'consent'
   });
   return res.redirect(`https://discord.com/oauth2/authorize?${p.toString()}`);
@@ -119,23 +124,33 @@ async function upsertDiscordUser(me) {
   } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
 }
 
-function oauthFailureRedirect(res, error) {
+function readOAuthReturn(req) {
+  try {
+    return readOAuthState(req.query.state, jwtSecret).returnTo;
+  } catch {
+    return resolveOAuthReturnUrl('', webUrl);
+  }
+}
+
+function oauthFailureRedirect(res, error, returnTo) {
   const message = encodeURIComponent(formatOAuthFailure(error));
-  return res.redirect(`${webUrl}/?auth_error=${message}`);
+  const safeReturn = resolveOAuthReturnUrl(returnTo, webUrl);
+  return res.redirect(`${safeReturn}/?auth_error=${message}`);
 }
 
 app.get('/auth/discord/callback', async (req, res) => {
-  if (req.query.error) return oauthFailureRedirect(res, new Error(`Discord OAuth رفض الطلب (${String(req.query.error).slice(0, 120)})`));
+  const returnTo = readOAuthReturn(req);
+  if (req.query.error) return oauthFailureRedirect(res, new Error(`Discord OAuth رفض الطلب (${String(req.query.error).slice(0, 120)})`), returnTo);
   if (!req.query.code) return res.status(400).send('Missing OAuth code');
   try {
     const oauth = await exchangeDiscordCode(req.query.code, discordRedirectUri);
     const user = await upsertDiscordUser(oauth.me);
     const guild = await joinLegacyGuild(oauth.me.id, oauth.accessToken);
     console.log(`[LEGACY:oauth] Discord ${oauth.me.id} authenticated and verified in guild ${guild.id}`);
-    return res.redirect(`${webUrl}/?token=${encodeURIComponent(sign(user))}`);
+    return res.redirect(`${returnTo}/?token=${encodeURIComponent(sign(user))}`);
   } catch (e) {
     console.error('[LEGACY:oauth]', redactSecrets(e?.message || e));
-    return oauthFailureRedirect(res, e);
+    return oauthFailureRedirect(res, e, returnTo);
   }
 });
 
