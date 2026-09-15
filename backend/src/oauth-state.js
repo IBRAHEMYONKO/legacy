@@ -37,6 +37,20 @@ function resolveOAuthReturnUrl(requested, fallback) {
   return safeFallback;
 }
 
+function resolveOAuthBrowserReturnUrl({ requested, origin, referer } = {}, fallback) {
+  const safeFallback = normalizeOrigin(fallback) || 'http://localhost:5173';
+  const browserCandidates = [origin, referer];
+
+  for (const value of browserCandidates) {
+    const candidate = normalizeOrigin(value);
+    if (!candidate) continue;
+    const safeCandidate = resolveOAuthReturnUrl(candidate, safeFallback);
+    if (safeCandidate === candidate && safeCandidate !== safeFallback) return safeCandidate;
+  }
+
+  return resolveOAuthReturnUrl(requested, safeFallback);
+}
+
 function createOAuthState(returnTo, secret) {
   if (!secret) throw new Error('JWT_SECRET غير مضبوط في .env');
   const safeReturn = normalizeOrigin(returnTo);
@@ -65,5 +79,6 @@ function readOAuthState(state, secret) {
 module.exports = {
   createOAuthState,
   readOAuthState,
-  resolveOAuthReturnUrl
+  resolveOAuthReturnUrl,
+  resolveOAuthBrowserReturnUrl
 };
