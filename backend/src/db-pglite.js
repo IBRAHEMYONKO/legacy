@@ -41,7 +41,8 @@ const ready = (async () => {
   await db.exec(fs.readFileSync(schemaPath, 'utf8'));
 
   const guardPool = {
-    query: async (sql, params = []) => resultOf(await db.query(sql, params))
+    query: async (sql, params = []) => resultOf(await db.query(sql, params)),
+    exec: async (sql) => db.exec(sql)
   };
   await ensureIdentityGuard(guardPool);
 })();
